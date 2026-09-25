@@ -1,0 +1,41 @@
+# CNDR items indexer. Rename `app` before `fly launch --no-deploy` (or let launch rewrite it).
+app = "cndr-indexer"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = "30s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+  CNDR_STATE = "/data/state.json"
+  CNDR_NETWORK = "mainnet"      # mainnet (also for regtest) | stagenet | testnet
+  CNDR_SYNC_SECS = "20"
+  PORT = "8787"
+  # CNDR_DAEMON is set as a secret: fly secrets set CNDR_DAEMON=...
+
+[[mounts]]
+  source = "cndr_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "60s"
+    interval = "30s"
+    method = "GET"
+    path = "/state"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[restart]]
+  policy = "always"
