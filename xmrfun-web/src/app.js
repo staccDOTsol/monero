@@ -449,7 +449,7 @@ async function flowCoinBuy(o, tick) {
     try { await post("/coin/pay", { offer_id: o.id, pay_txid, pay_proof }); break; }
     catch (e) { if (i > 20) throw e; await sleep(5000); }
   }
-  tick(2, "Paid · seller's app sends your coins");
+  tick(2, "Paid · escrow sends your coins");
 }
 
 // background automation: sellers auto-deliver paid orders, buyers auto-claim deliveries, mints resume
@@ -545,7 +545,7 @@ function exploreResults() {
   const by = { hot: (a, b) => b.heat - a.heat, new: (a, b) => b.born - a.born, top: (a, b) => b.top - a.top }[EX.sort];
   xs.sort(by);
   if (!xs.length) return h("div", { class: "empty" }, h("b", {}, q ? `Nothing matches “${EX.q}”` : "Nothing here yet"),
-    q ? "Try a ticker like $CNDR or a collection name." : h("a", { href: "#/launch/coin", style: "color:var(--accent)" }, "Be the first to launch →"));
+    q ? "Try a ticker like $STACCX or a collection name." : h("a", { href: "#/launch/coin", style: "color:var(--accent)" }, "Be the first to launch →"));
   return h("div", { class: "grid" }, xs.map((x, i) => (x.type === "coin" ? coinCard(x.id, i) : collCard(x.id, i))));
 }
 async function shareLink(title, path) {
@@ -569,14 +569,14 @@ const VIEWS = {
       ["Is this real Monero?", "Memecoins: each is an independent Monero-codebase network with its own network ID and coin, and the same privacy tech (RingCT, stealth addresses, RandomX). It shares Monero's genesis block so standard Monero wallets can follow it. Collections: every item is a real XMR output on Monero mainnet (the creator sets its size, 0.001 XMR by default) — but Monero itself doesn't know it's an item. The xmrfun indexer records which output is which item, and only accepts changes backed by proofs it checks against the chain."],
       ["Who holds my keys?", "You. The wallet runs in your browser and never sends keys anywhere. xmrfun only sees signatures and proofs you choose to publish."],
       ["Do I lose XMR when I mint?", "No. Each item holds a tiny XMR output (0.001 by default) that you own and that travels with the item. Only the network fee is spent."],
-      ["How do new coins get secure?", "One stratum URL points miners at every xmrfun chain, weighted by what pays best — new launches get hashrate from day one."],
+      ["How do new coins get secure?", "One stratum URL points miners at every xmrfun coin. New launches get a boosted share of hashrate from block 1, then compete on what pays best."],
       ["What's the catch?", "Collections rely on the xmrfun indexer as the registry — Monero hides who received what, so ownership can't be rebuilt from the chain alone like Ordinals. Spend an item's output from a normal wallet and the item burns. Young coin chains are only as strong as their hashrate, and there's no public AMM chart — prices come from the market here."],
     ];
     return h("div", { class: "landing" },
       h("section", { class: "hero" },
-        h("div", { class: "label" }, "private launchpad · built on monero"),
+        h("div", { class: "label" }, "private launchpad · built on monero tech"),
         h("h1", { class: "mega" }, "Memecoins ", h("em", {}, "nobody"), " can snipe."),
-        h("p", { class: "lede" }, "Launch a coin on its own private RandomX network, or drop collectibles backed by real XMR. Private transactions, no founder allocation, no contract to rug."),
+        h("p", { class: "lede" }, "Launch a coin on its own independent RandomX network, or drop collectibles backed by real XMR. Private transactions, no founder allocation, no contract to rug."),
         h("div", { class: "hero-cta" },
           h("a", { class: "btn primary", href: "#/launch/coin" }, "Launch a coin"),
           h("a", { class: "btn", href: "#/feed" }, "See what's live")),
@@ -839,7 +839,7 @@ const VIEWS = {
           h("div", { class: "px" }, xmr(b.owed, 3), h("small", {}, "owed")))))));
     }).catch(() => {});
     return h("div", {}, h("h1", {}, "Mine"),
-      h("p", { class: "lede" }, "One URL mines every xmrfun chain. The pool routes your hashrate to whichever launch pays best right now."),
+      h("p", { class: "lede" }, "One URL mines every xmrfun coin. New launches get hashrate first, then the pool routes to whatever pays best."),
       h("div", { class: "addr", onclick: () => copy(url, "Stratum URL copied") }, url),
       h("section", { class: "sec" }, h("h2", {}, "Pool"), h("div", { style: "margin-top:12px" }, box)), earned,
       h("section", { class: "sec" }, h("h2", {}, "Start mining"),
