@@ -1,0 +1,47 @@
+{
+  "pool": {
+    "stratum_host": "0.0.0.0",
+    "stratum_port": 3333,
+    "http_host": "0.0.0.0",
+    "http_port": 8080,
+    "ledger_path": "/data/ledger.sqlite",
+    "reserve_size": 8,
+    "poll_interval": 1.0,
+    "template_refresh": 30,
+    "allocator": {
+      "interval": 10,
+      "profit_window": 300,
+      "work_window": 1800,
+      "min_dwell": 120,
+      "hysteresis": 0.5,
+      "power": 1.0,
+      "min_weight": 0.02
+    },
+    "vardiff": {
+      "initial": 20000,
+      "min": 1000,
+      "target_time": 15,
+      "retarget_time": 60
+    },
+    "verify": {
+      "first_n": 20,
+      "ratio": 0.05,
+      "threads": 2,
+      "max_caches": 3
+    },
+    "chains_url": "https://xmrfun.xyz/chains"
+  },
+  "chains": [
+    {
+      "name": "monero",
+      "ticker": "XMR",
+      "enabled": false,
+      "daemon": "http://monerod-mainnet.internal:18081",
+      "address": "REPLACE_WITH_POOL_XMR_ADDRESS",
+      "price": {
+        "type": "static",
+        "value": 1.0
+      }
+    }
+  ]
+}

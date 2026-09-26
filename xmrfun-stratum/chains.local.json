@@ -1,0 +1,46 @@
+{
+  "pool": {
+    "stratum_host": "127.0.0.1",
+    "stratum_port": 3333,
+    "http_host": "127.0.0.1",
+    "http_port": 8080,
+    "ledger_path": "data/local-ledger.sqlite",
+    "reserve_size": 8,
+    "poll_interval": 1.0,
+    "template_refresh": 30,
+    "allocator": {
+      "interval": 10,
+      "profit_window": 300,
+      "work_window": 1800,
+      "min_dwell": 30,
+      "hysteresis": 0.5,
+      "power": 1.0,
+      "min_weight": 0.02
+    },
+    "vardiff": {
+      "initial": 5000,
+      "min": 1000,
+      "target_time": 15,
+      "retarget_time": 60
+    },
+    "verify": {
+      "first_n": 20,
+      "ratio": 0.05,
+      "threads": 2,
+      "max_caches": 3
+    }
+  },
+  "chains": [
+    {
+      "name": "cinderfork",
+      "ticker": "CNDR",
+      "enabled": true,
+      "daemon": "http://127.0.0.1:19081",
+      "address": "RSeeBw8V1rmCvuQRa1X3BC3DdtqcujpwviYq15N9fcdm1iFkMG8FyCM7SuXhehMArNZmBGPydNCiTVbXR2XyEqhY1da8rA9GQ",
+      "price": {
+        "type": "static",
+        "value": 1.0
+      }
+    }
+  ]
+}

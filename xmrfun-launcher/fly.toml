@@ -1,0 +1,17 @@
+# Background worker: turns queued launches into live chain apps. No public services.
+app = "xmrfun-launcher"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[mounts]
+  source = "launcher_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[[restart]]
+  policy = "always"

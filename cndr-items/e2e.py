@@ -2,11 +2,14 @@
 
 Wallet A (creator + first holder) on :28082, wallet B on :28083, daemon :28081, indexer :8787.
 """
-import json, sys, time, urllib.request, urllib.error
+import json, os, sys, time, urllib.request, urllib.error
 
-A, B = "http://127.0.0.1:28082/json_rpc", "http://127.0.0.1:28083/json_rpc"
-D, IDX = "http://127.0.0.1:28081", "http://127.0.0.1:8787"
+A = os.environ.get("E2E_WALLET_A", "http://127.0.0.1:28082/json_rpc")
+B = os.environ.get("E2E_WALLET_B", "http://127.0.0.1:28083/json_rpc")
+D = os.environ.get("E2E_DAEMON", "http://127.0.0.1:28081")
+IDX = os.environ.get("E2E_INDEXER", "http://127.0.0.1:8787")
 ONE = 10**12
+ITEM = int(os.environ.get("CNDR_ITEM_UNIT", 10**9))
 COLL = "cinderfork"
 results = []
 
@@ -57,13 +60,13 @@ def send(w, from_acct, to_addr, amount):
 
 
 def hold_proof(w, acct, no):
-    return rpc(w, "get_reserve_proof", {"all": False, "account_index": acct, "amount": ONE,
+    return rpc(w, "get_reserve_proof", {"all": False, "account_index": acct, "amount": ITEM,
                                         "message": m("hold", no)})["signature"]
 
 
 def mint_item(no):
     acct = new_item_account(A, no)
-    txid = send(A, 0, acct["address"], ONE)
+    txid = send(A, 0, acct["address"], ITEM)
     mine()
     payload = {
         "collection_id": COLL, "item_no": no, "mint_txid": txid, "item_address": acct["address"],
@@ -83,6 +86,20 @@ def main():
     r = post(IDX + "/collections", {"collection_id": "fake", "cap": 10, "creator_address": creator, "creator_sig": sig})
     check("reject collection with signature for different params", not r.get("ok"), r)
 
+    # --- signed metadata ---
+    import hashlib
+    meta = {"name": "Cinderfork Genesis", "symbol": "CNDR", "image": "ipfs://bafyexample"}
+    dg = hashlib.sha256(json.dumps(meta, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    r = post(IDX + "/collections/meta", {"collection_id": COLL, "meta": meta,
+             "creator_sig": rpc(A, "sign", {"data": f"cndr-item:v1:meta:{COLL}:{dg}"})["signature"]})
+    check("creator sets collection metadata", r.get("ok"), r)
+    r = post(IDX + "/collections/meta", {"collection_id": COLL, "meta": dict(meta, name="hijacked"),
+             "creator_sig": rpc(A, "sign", {"data": f"cndr-item:v1:meta:{COLL}:{dg}"})["signature"]})
+    check("reject metadata that differs from what creator signed", not r.get("ok"), r)
+    r = post(IDX + "/collections/meta", {"collection_id": COLL, "meta": meta,
+             "creator_sig": rpc(B, "sign", {"data": f"cndr-item:v1:meta:{COLL}:{dg}"})["signature"]})
+    check("reject metadata signed by non-creator", not r.get("ok"), r)
+
     # --- mint #2 ---
     acct2, mint2, payload = mint_item(2)
     r = post(IDX + "/mint", payload)
@@ -100,10 +117,10 @@ def main():
     check("reject mint signed by non-creator", not r.get("ok"), r)
 
     # --- transfer #2 A -> B ---
-    send(A, 0, acct2["address"], 2 * 10**10)  # fee top-up into item account
+    send(A, 0, acct2["address"], ITEM // 2)  # fee top-up into item account
     mine()
     b_item = new_item_account(B, 2)
-    xfer = send(A, acct2["account_index"], b_item["address"], ONE)
+    xfer = send(A, acct2["account_index"], b_item["address"], ITEM)
     mine()
     time.sleep(6)  # let indexer sync observe the spend
     st = json.loads(urllib.request.urlopen(IDX + "/state").read())
@@ -128,10 +145,10 @@ def main():
     acct3, _, p3 = mint_item(3)
     r = post(IDX + "/mint", p3)
     check("mint #0003", r.get("ok"), r)
-    send(A, 0, acct3["address"], 2 * 10**10); mine()
+    send(A, 0, acct3["address"], ITEM // 2); mine()
     b3 = new_item_account(B, 3)
     split = rpc(A, "transfer", {"account_index": acct3["account_index"], "destinations": [
-        {"amount": ONE // 2, "address": b3["address"]}, {"amount": ONE // 2, "address": b3["address"]}]})["tx_hash"]
+        {"amount": ITEM // 2, "address": b3["address"]}, {"amount": ITEM // 2, "address": b3["address"]}]})["tx_hash"]
     mine(); time.sleep(6)
     sp = {"collection_id": COLL, "item_no": 3, "xfer_txid": split, "to_address": b3["address"],
           "tx_proof": rpc(A, "get_tx_proof", {"txid": split, "address": b3["address"], "message": m("xfer", 3)})["signature"],

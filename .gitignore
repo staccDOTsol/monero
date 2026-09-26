@@ -120,3 +120,14 @@ nbproject
 __pycache__/
 *.pyc
 *.log
+
+# xmrfun build outputs and local state
+.claude/
+xmrfun-web/node_modules/
+cndr-items/web/
+cndr-deploy/app/web/
+xmrfun-stratum/lib/
+xmrfun-stratum/build/
+xmrfun-stratum/data/
+xmrfun-launcher/chains/
+__pycache__/

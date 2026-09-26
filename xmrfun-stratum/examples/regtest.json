@@ -1,0 +1,57 @@
+{
+  "pool": {
+    "stratum_host": "127.0.0.1",
+    "stratum_port": 3333,
+    "http_host": "127.0.0.1",
+    "http_port": 8089,
+    "ledger_path": "data/regtest-ledger.sqlite",
+    "poll_interval": 0.5,
+    "template_refresh": 20,
+    "allocator": {
+      "interval": 5,
+      "profit_window": 15,
+      "work_window": 90,
+      "min_dwell": 15,
+      "hysteresis": 0.5,
+      "power": 1.0,
+      "min_weight": 0.02
+    },
+    "vardiff": {
+      "initial": 300,
+      "min": 50,
+      "target_time": 3,
+      "retarget_time": 12,
+      "hashrate_window": 60
+    },
+    "verify": {
+      "first_n": 20,
+      "ratio": 0.25,
+      "threads": 2,
+      "max_caches": 2
+    }
+  },
+  "chains": [
+    {
+      "name": "alpha",
+      "ticker": "ALP",
+      "daemon": "http://127.0.0.1:48081",
+      "address": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+      "price": {"type": "static", "value": 0.03}
+    },
+    {
+      "name": "beta",
+      "ticker": "BET",
+      "daemon": "http://127.0.0.1:48091",
+      "address": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+      "price": {"type": "static", "value": 0.01}
+    },
+    {
+      "name": "monero",
+      "ticker": "XMR",
+      "enabled": false,
+      "daemon": "http://127.0.0.1:18081",
+      "address": "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
+      "price": {"type": "static", "value": 1.0}
+    }
+  ]
+}

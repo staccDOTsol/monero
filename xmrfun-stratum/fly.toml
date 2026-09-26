@@ -1,0 +1,74 @@
+# Fly.io template for the xmrfun stratum.  NOT deployed -- fill in and run
+#   fly launch --no-deploy --copy-config   (from this directory)
+#   fly volumes create xmrfun_ledger --size 1
+#   fly ips allocate-v4        # raw TCP on a public port needs a dedicated IPv4
+#   fly deploy
+#
+# Miners then point at:  xmrig -o <app>.fly.dev:3333 -u <address>[.worker] -a rx/0
+# Upstream monerods are reached over Fly's private network (e.g.
+# http://<chain-app>.internal:18081) -- set those URLs in chains.json.
+
+app = "xmrfun-stratum"
+primary_region = "iad"
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LOG_LEVEL = "INFO"
+  XMRFUN_CONFIG = "/app/chains.json"
+
+[mounts]
+  source = "xmrfun_ledger"
+  destination = "/data"
+
+# Stratum: raw TCP passthrough (no handlers), long-lived connections.
+[[services]]
+  internal_port = 3333
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 3333
+    handlers = []
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 10000
+    soft_limit = 8000
+
+  [[services.tcp_checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "20s"
+
+# Stats API: GET /stats, /health, /ledger
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+  auto_stop_machines = "off"
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "get"
+    path = "/stats"   # /health is 503 until some chain is live; that is not a reason to restart
+
+# RandomX light caches are 256 MiB each (verify.max_caches); size RAM accordingly.
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory = "2gb"

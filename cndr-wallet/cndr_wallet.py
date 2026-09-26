@@ -7,9 +7,10 @@ Wraps your own monero-wallet-rpc (--wallet-rpc / $CNDR_WALLET_RPC) and a CNDR in
 Local bookkeeping (which account index holds which item) lives in
 ~/.cndr-wallet/<primary-address-prefix>.json  (override dir with $CNDR_WALLET_HOME).
 """
-import argparse, json, os, sys, time, urllib.error, urllib.request
+import argparse, hashlib, json, os, sys, time, urllib.error, urllib.request
 
 ONE = 10**12
+ITEM = 10**9  # every item is bound to exactly one 0.001 XMR output
 DEFAULT_INDEXER = "http://127.0.0.1:8787"
 PREFIX_LEN = 16
 
@@ -165,7 +166,7 @@ def account_balance(w, idx):
 
 
 def hold_proof(w, acct, coll, no):
-    return w.rpc("get_reserve_proof", {"all": False, "account_index": acct, "amount": ONE,
+    return w.rpc("get_reserve_proof", {"all": False, "account_index": acct, "amount": ITEM,
                                        "message": msg("hold", coll, no)})["signature"]
 
 
@@ -173,7 +174,7 @@ def incoming_item_output(w, acct, txid):
     """The exactly-1.0 output from txid in account acct, or None."""
     res = w.rpc("incoming_transfers", {"transfer_type": "all", "account_index": acct})
     for t in res.get("transfers", []):
-        if t["tx_hash"] == txid and t["amount"] == ONE:
+        if t["tx_hash"] == txid and t["amount"] == ITEM:
             return t
     return None
 
@@ -187,6 +188,18 @@ def cmd_collection_create(ctx, a):
     res = idx.submit("/collections", {"collection_id": a.collection_id, "cap": cap,
                                       "creator_address": w.primary(), "creator_sig": sig})
     print(f"collection {res['collection_id']} registered (cap {res['cap']}), creator {w.primary()}")
+
+
+def cmd_collection_meta(ctx, a):
+    w, idx = ctx["wallet"], ctx["indexer"]
+    meta = {k: v for k, v in (("name", a.name), ("symbol", a.symbol), ("description", a.description),
+                              ("image", a.image)) if v}
+    if not meta:
+        raise CliError("give at least one of --name --symbol --description --image")
+    digest = hashlib.sha256(json.dumps(meta, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+    sig = w.rpc("sign", {"data": f"cndr-item:v1:meta:{a.collection_id}:{digest}"})["signature"]
+    res = idx.submit("/collections/meta", {"collection_id": a.collection_id, "meta": meta, "creator_sig": sig})
+    print(f"collection {res['collection_id']} metadata set: {json.dumps(res['meta'])}")
 
 
 def cmd_mint(ctx, a):
@@ -210,12 +223,12 @@ def cmd_mint(ctx, a):
         log(f"resuming mint of {key}: account {acct_idx}, tx {txid}")
     else:
         _, unlocked = account_balance(w, 0)
-        if unlocked < ONE + 10**9:
+        if unlocked < ITEM + 10**9:
             raise CliError(f"account 0 unlocked balance {xmr(unlocked)} too low to mint (need 1.0 + fee)")
         acct = w.rpc("create_account", {"label": f"cndr:{key}"})
         acct_idx, addr = acct["account_index"], acct["address"]
         txid = w.rpc("transfer", {"account_index": 0,
-                                  "destinations": [{"amount": ONE, "address": addr}]})["tx_hash"]
+                                  "destinations": [{"amount": ITEM, "address": addr}]})["tx_hash"]
         st.put(key, {"state": "minting", "account_index": acct_idx, "address": addr, "mint_txid": txid})
         log(f"mint tx {txid} -> account {acct_idx} ({addr})")
 
@@ -275,10 +288,12 @@ def cmd_send(ctx, a):
             raise CliError(f"item output {item['bound_txid']} not found unspent in account {acct}")
         buf = int(round(a.fee_buffer * ONE))
         bal, unlocked = account_balance(w, acct)
-        if bal - ONE >= ONE:
-            raise CliError(f"account {acct} holds {xmr(bal)} — more than 1.0 + buffer; wallet might not spend the "
+        if buf >= ITEM:
+            raise CliError("--fee-buffer must be below the item unit, or the wallet may skip the item output")
+        if bal - ITEM >= ITEM:
+            raise CliError(f"account {acct} holds {xmr(bal)} — more than the item + buffer; wallet might not spend the "
                            "item output. Sweep the excess out first.")
-        if bal < ONE + buf // 2:
+        if bal < ITEM + buf // 2:
             log(f"topping up account {acct} with {xmr(buf)} fee buffer from account 0")
             tt = w.rpc("transfer", {"account_index": 0,
                                     "destinations": [{"amount": buf, "address": rec["address"]}]})["tx_hash"]
@@ -287,11 +302,11 @@ def cmd_send(ctx, a):
         def spendable():
             w.refresh()
             b, u = account_balance(w, acct)
-            return (u == b and u > ONE), f"unlocked {xmr(u)} of {xmr(b)}"
+            return (u == b and u > ITEM), f"unlocked {xmr(u)} of {xmr(b)}"
         poll(f"account {acct} to be fully spendable", spendable, a.timeout)
 
         xfer = w.rpc("transfer", {"account_index": acct,
-                                  "destinations": [{"amount": ONE, "address": to}]})["tx_hash"]
+                                  "destinations": [{"amount": ITEM, "address": to}]})["tx_hash"]
         # confirm the tx really consumed the item output (else the item doesn't move)
         w.refresh()
         out = incoming_item_output(w, acct, item["bound_txid"])
@@ -320,8 +335,8 @@ def cmd_claim(ctx, a):
                                    "message": msg("xfer", coll, no), "signature": a.tx_proof})
     if not chk["good"]:
         raise CliError("tx proof does not verify for this item/receiving address")
-    if chk["received"] != ONE:
-        raise CliError(f"tx delivered {xmr(chk['received'])} to the receiving address, not exactly 1.0 — "
+    if chk["received"] != ITEM:
+        raise CliError(f"tx delivered {xmr(chk['received'])} to the receiving address, not exactly the item unit — "
                        "item cannot be claimed")
     wait_confirmed(w, a.xfer_txid, acct, a.confirmations, a.timeout)
     payload = {"collection_id": coll, "item_no": no, "xfer_txid": a.xfer_txid, "to_address": addr,
@@ -367,6 +382,11 @@ def main(argv=None):
     cc = coll.add_parser("create", help="sign and register a collection")
     cc.add_argument("collection_id"); cc.add_argument("cap", type=int)
     cc.set_defaults(fn=cmd_collection_create)
+    cm = coll.add_parser("meta", help="sign and publish collection name/symbol/description/image")
+    cm.add_argument("collection_id")
+    for f in ("name", "symbol", "description", "image"):
+        cm.add_argument(f"--{f}")
+    cm.set_defaults(fn=cmd_collection_meta)
 
     m = sub.add_parser("mint", help="mint an item (creator only)")
     m.add_argument("collection"); m.add_argument("item_no", type=int); m.set_defaults(fn=cmd_mint)
@@ -376,7 +396,7 @@ def main(argv=None):
 
     s = sub.add_parser("send", help="send a held item to a recipient's receiving address")
     s.add_argument("collection"); s.add_argument("item_no", type=int); s.add_argument("recipient_item_address")
-    s.add_argument("--fee-buffer", type=float, default=0.02, help="fee top-up amount (default 0.02)")
+    s.add_argument("--fee-buffer", type=float, default=0.0005, help="fee top-up, must be below the 0.001 item unit (default 0.0005)")
     s.set_defaults(fn=cmd_send)
 
     c = sub.add_parser("claim", help="claim an incoming item with the sender's tx proof")

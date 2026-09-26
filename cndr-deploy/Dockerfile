@@ -30,6 +30,7 @@ FROM python:3.12-slim-bookworm
 COPY --from=monero /usr/local/bin/monero-wallet-rpc /usr/local/bin/monero-wallet-rpc
 WORKDIR /app
 COPY app/indexer.py app/proofs.py ./
+COPY app/web ./web
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 ENV PYTHONUNBUFFERED=1 \

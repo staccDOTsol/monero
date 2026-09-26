@@ -1,5 +1,5 @@
 # CNDR items indexer. Rename `app` before `fly launch --no-deploy` (or let launch rewrite it).
-app = "cndr-indexer"
+app = "xmrfun"
 primary_region = "iad"
 kill_signal = "SIGTERM"
 kill_timeout = "30s"
