@@ -130,14 +130,31 @@ def main():
                   "--p2p-bind-ip", "127.0.0.1", "--rpc-bind-ip", "127.0.0.1"]
         home = os.path.join(tmp, "home")
         os.makedirs(home)
-        start(tmp, "staccx", [monerod, "--chain-config", s_path, *common, "--add-exclusive-node", f"127.0.0.1:{t_p2p}"],
-              env={**os.environ, "HOME": home})
-        start(tmp, "testb", [monerod, "--chain-config", t_path, *common, "--data-dir", os.path.join(tmp, "testb"),
-                             "--log-file", os.path.join(tmp, "testb.log"), "--p2p-bind-port", str(t_p2p),
-                             "--rpc-bind-port", str(t_rpc), "--add-exclusive-node", f"127.0.0.1:{s['p2p_port']}"])
-        for port in (s_rpc, t_rpc):
-            wait_for(lambda: rpc(port, "get_info")["status"] == "OK", 120, f"monerod on {port}")
         s_dir = os.path.join(home, ".xmrfun-staccx")
+
+        def nodes(*extra_s, extra_t):
+            start(tmp, "staccx", [monerod, "--chain-config", s_path, *common, *extra_s], env={**os.environ, "HOME": home})
+            start(tmp, "testb", [monerod, "--chain-config", t_path, *common, "--data-dir", os.path.join(tmp, "testb"),
+                                 "--log-file", os.path.join(tmp, "testb.log"), "--p2p-bind-port", str(t_p2p),
+                                 "--rpc-bind-port", str(t_rpc), *extra_t])
+            for port in (s_rpc, t_rpc):
+                wait_for(lambda: rpc(port, "get_info")["status"] == "OK", 120, f"monerod on {port}")
+
+        # phase A: each node may only talk to the other chain -> handshakes must be refused.
+        nodes("--add-exclusive-node", f"127.0.0.1:{t_p2p}", extra_t=["--add-exclusive-node", f"127.0.0.1:{s['p2p_port']}"])
+
+        def refusal():
+            logs = open(os.path.join(s_dir, "xmrfun-staccx.log")).read() + open(os.path.join(tmp, "testb.log")).read()
+            return next((l for l in logs.splitlines() if "wrong network" in l.lower()), None)
+        line = wait_for(refusal, 90, "wrong-network refusal")
+        print("peer refusal:", line.split("\t")[-1].strip())
+        for port in (s_rpc, t_rpc):
+            info = rpc(port, "get_info")
+            assert info["incoming_connections_count"] + info["outgoing_connections_count"] == 0
+        stop_all()
+
+        # phase B: same data dirs, no peers at all (like a fresh chain's first node): each mines its own chain
+        nodes(extra_t=[])
         assert os.path.isdir(os.path.join(s_dir, "lmdb"))
         print(f"STACCX used default data dir {s_dir} and default rpc port {s_rpc} from its config")
         for port, c in ((s_rpc, s), (t_rpc, t)):
@@ -148,6 +165,7 @@ def main():
         # stock (brew) wallet-rpc on STACCX, our wallet-rpc (+ config) on TESTB for the premine
         stock_port, own_port = s_rpc + 200, t_rpc + 200
         start(tmp, "stock-wallet-rpc", [a.stock_wallet_rpc, "--daemon-address", f"127.0.0.1:{s_rpc}", "--trusted-daemon",
+                                        "--allow-mismatched-daemon-version",  # stock hard-fork table expects v1 at low heights
                                         "--rpc-bind-port", str(stock_port), "--disable-rpc-login", "--wallet-dir", tmp,
                                         "--log-file", os.path.join(tmp, "stock-wallet-rpc.log")])
         start(tmp, "own-wallet-rpc", [wallet_rpc, "--chain-config", t_path, "--daemon-address", f"127.0.0.1:{t_rpc}",
@@ -172,10 +190,6 @@ def main():
         show_chain(s_rpc, "STACCX")
         t_hs = show_chain(t_rpc, "TESTB")
         assert t_hs[1]["reward"] == int(t["premine"]["amount"])
-        logs = open(os.path.join(s_dir, "xmrfun-staccx.log")).read() + open(os.path.join(tmp, "testb.log")).read()
-        refusal = next((l for l in logs.splitlines() if "wrong network" in l.lower()), None)
-        assert refusal, "no wrong-network refusal in logs"
-        print("peer refusal:", refusal.split("\t")[-1].strip())
 
         for port, label in ((stock_port, "STOCK wallet-rpc on STACCX"), (own_port, "premine wallet on TESTB")):
             rpc(port, "refresh", timeout=600)

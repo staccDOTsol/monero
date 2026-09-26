@@ -10,7 +10,7 @@ Without `--chain-config` the binaries are Cinderfork, as before (prefix 4242, po
 19080/19081, `~/.cinderfork`).
 
 ```
-python3 chainconfig.py --name "Staccx" --ticker STACCX -o staccx.json   # new chain
+./xmrfun-genesis --name "Staccx" --ticker STACCX --supply 1000000 --block-time 120 > staccx.json
 monerod --chain-config staccx.json                                      # node
 monero-wallet-rpc --chain-config staccx.json --daemon-address 127.0.0.1:<rpc_port> ...
 python3 verify.py                                                       # local end-to-end test
@@ -18,10 +18,10 @@ python3 verify.py                                                       # local 
 
 | file | what |
 |---|---|
-| `chainconfig.py` | launch params -> chain JSON (random network id, genesis tx + nonce, optional premine); `--check FILE` prints a config's genesis hash |
+| `xmrfun-genesis` / `chainconfig.py` | launch params -> chain JSON on stdout (random network id, ports, supply, block time, launch time, optional premine / unique genesis); `--check FILE` prints a config's genesis hash |
 | `cnutil.py` | stdlib keccak / ed25519 / base58 / tx serialization used to build genesis + premine txs (`python3 cnutil.py` self-tests against Monero's genesis hash) |
-| `Dockerfile` | the single image: monerod + monero-wallet-rpc + `xmrfun-chainconfig` |
-| `entrypoint.sh` | `CHAIN_CONFIG_JSON` env (raw or base64) -> `/data/chain.json` -> monerod, public P2P 18080 + restricted RPC 18081 |
+| `Dockerfile` | the single image `registry.fly.io/xmrfun-chain:latest`: monerod + monero-wallet-rpc + `xmrfun-genesis` |
+| `entrypoint.sh` | `CHAIN_CONFIG_JSON` (base64 or raw) -> `/data/chain.json` -> monerod + pool wallet-rpc (ports below) |
 | `fly.chain.toml` | one Fly app per coin |
 | `verify.py` | two chains from one binary, mining, peer refusal, wallet-rpc, no-flag Cinderfork check |
 
@@ -31,8 +31,8 @@ python3 verify.py                                                       # local 
 {
   "cryptonote_name": "xmrfun-staccx",   // required: data dir (~/.xmrfun-staccx) and default log/conf names
   "network_id": "0d6491d8...c21a",       // required: 32 hex chars (16 bytes); peers with another id are refused
-  "genesis_tx": "013c01ff00...",         // required: hex coinbase tx of block 0
-  "genesis_nonce": 3175513742,           // required: uint32
+  "genesis_tx": "013c01ff00...",         // optional, default: Monero's genesis tx (stock wallets need it)
+  "genesis_nonce": 10000,                // optional, default 10000 (Monero's)
   "launch_time": 1790387000,             // unix time; required only if hard_forks is omitted
   "hard_forks": [{"version": 16, "height": 1, "threshold": 0, "time": 1790387000}],
                                          // default: [{16, 1, 0, launch_time}], i.e. RandomX + v16 rules from block 1.
@@ -77,6 +77,17 @@ before it changes anything. On any error the binary prints why and exits 1.
 `--chain-config` must be given on the command line, not in a `--config-file`, because
 it is read before option parsing.
 
+## Stock wallets
+
+Stock wallet2 checks every block's major version against Monero's compiled fork
+schedule (v1 up to height 1,009,827), so it rejects our v16 block 1 with "Unexpected
+hard fork version v16 at height 1". It needs `allow_mismatched_daemon_version`
+(`monero-wallet-rpc --allow-mismatched-daemon-version`), which verify.py shows working
+with brew's v0.18.5.1. monero-ts has to set the same flag. Also, a stock wallet
+restoring at height >= 1000 jumps to Monero's compiled checkpoint hashes in
+`fast_refresh`, so restore xmrfun wallets from height 0. Wallets built from this tree
+with `--chain-config` need neither workaround.
+
 ## Addresses and key reuse
 
 Config chains keep Monero's address prefixes by default, so a stock wallet (monero-ts,
@@ -92,7 +103,15 @@ for users:
 
 ## Genesis and premine
 
-`chainconfig.py` builds the genesis coinbase directly. It is a v1 coinbase at height 0
+By default a chain keeps Monero's genesis block (`418015bb…`). Stock wallet2 (monero-ts,
+brew's monero-wallet-rpc) seeds its chain with the compiled-in genesis and can't sync
+anything else. Chains are told apart by `network_id` (peers refuse each other) and by
+every block from height 1 on. Under `--chain-config`, block 0 is exempt from the
+block-reward rule, so a custom supply or emission still accepts the stock genesis
+output.
+
+`--unique-genesis` builds a per-coin genesis instead. Only wallets started with
+`--chain-config` can follow such a chain. It is a v1 coinbase at height 0
 of exactly the v1 block reward, which consensus requires:
 `max(MONEY_SUPPLY >> EMISSION_SPEED_FACTOR, FINAL_SUBSIDY)`. It pays a random one-time
 key whose secret is discarded, i.e. burned. Its extra field carries a tx pubkey and the
@@ -109,12 +128,33 @@ to the premine address, with a view tag and unlock height 61, and
 premine address. Block 1 has to come from monerod's own template (built-in miner, or
 `get_block_template` used as-is, without a pool rewriting the coinbase).
 
-## Fly.io
+## Node startup
 
-Build the image once, then each coin is a new app running that image with its own
-`CHAIN_CONFIG_JSON` secret and a volume. The exact commands are in the headers of
-`Dockerfile` and `fly.chain.toml`. P2P is raw TCP on 18080 and needs a dedicated IPv4
-(`fly ips allocate-v4`). The restricted RPC is served on 18081 (http) and 443 (https).
-`get_block_template` / `submit_block` are allowed on restricted RPC, so the stratum can
-use it. The node itself doesn't mine. `seed_nodes` aren't consensus, so they can be
-added to the JSON after the first node's IP is known without changing the chain.
+A config-chain node counts itself as synchronized from startup. Otherwise the first
+node of a new chain, which has no peer to sync from, would answer every
+`get_block_template` with "Core is busy" forever. The side effect: a node joining an
+existing chain reports `target_height` 0 while it catches up.
+
+## Fly.io (one app per coin: `xmrfun-chain-<ticker>`)
+
+Build the image once as `registry.fly.io/xmrfun-chain:latest`, then each coin is an
+app running that image with its own secrets and volume. The exact commands are in the
+headers of `Dockerfile` and `fly.chain.toml`.
+
+| port | what | reachable |
+|---|---|---|
+| 18080 | P2P | public TCP (needs `fly ips allocate-v4`) |
+| 18089 | restricted RPC, CORS `RPC_CORS_ORIGINS` (default `https://xmrfun.xyz,https://xmrfun.fly.dev`) | `https://xmrfun-chain-<ticker>.fly.dev` (443) and http :18089 |
+| 18081 | full RPC (`get_block_template`, `submit_block`, ...) | private: `http://xmrfun-chain-<ticker>.internal:18081` |
+| 18083 | pool monero-wallet-rpc, **no login** | private: `http://xmrfun-chain-<ticker>.internal:18083` |
+
+Secrets and env: `CHAIN_CONFIG_JSON` (required, base64 or raw),
+`POOL_WALLET_SEED` (25 words; restored at height 0 into `/data/pool-wallet` on first
+boot, reopened afterwards), `POOL_WALLET_PASSWORD`, `RPC_CORS_ORIGINS`,
+`MONEROD_ARGS`, `LOG_LEVEL`. The container refuses a `CHAIN_CONFIG_JSON` whose
+network id or genesis differs from the one already on the volume. If either process
+exits, the container exits and Fly restarts it. The node doesn't mine. `seed_nodes`
+aren't consensus, so they can be added once the first node's IP is known.
+
+Anything on the org's private network can spend the pool wallet on 18083. Keep
+untrusted apps out of the org.
