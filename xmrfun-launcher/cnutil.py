@@ -211,7 +211,7 @@ def genesis_tx(amount: int, tx_pub: bytes, out_key: bytes, nonce: bytes) -> byte
             varint(len(extra)) + extra)
 
 
-def coinbase_v2(height: int, amount: int, spend_pub: bytes, view_pub: bytes, r: int):
+def coinbase_v2(height: int, amount: int, spend_pub: bytes, view_pub: bytes, r: int, unlock_window: int = 60):
     """v2 (RingCT-null) coinbase with one view-tagged output to (spend_pub, view_pub).
     Returns (blob, prefix_len, output_key)."""
     derivation = encode_point(scalarmult(scalarmult(decode_point(view_pub), r), 8))
@@ -219,7 +219,7 @@ def coinbase_v2(height: int, amount: int, spend_pub: bytes, view_pub: bytes, r: 
     out_key = encode_point(_add(scalarmult(G, s), decode_point(spend_pub)))
     view_tag = keccak256(b"view_tag" + derivation + varint(0))[:1]
     extra = extra_field(pubkey(r))
-    prefix = (varint(2) + varint(height + 60) + varint(1) + b"\xff" + varint(height) +
+    prefix = (varint(2) + varint(height + unlock_window) + varint(1) + b"\xff" + varint(height) +
               varint(1) + varint(amount) + b"\x03" + out_key + view_tag +
               varint(len(extra)) + extra)
     return prefix + b"\x00", len(prefix), out_key  # trailing 0x00 = rct type Null

@@ -29,7 +29,11 @@
       "threads": 2,
       "max_caches": 3
     },
-    "chains_url": "https://xmrfun.xyz/chains"
+    "chains_url": "https://xmrfun.xyz/chains",
+    "payouts": {
+      "maturity": 5,
+      "interval": 30
+    }
   },
   "chains": [
     {

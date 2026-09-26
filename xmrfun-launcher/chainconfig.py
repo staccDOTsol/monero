@@ -45,7 +45,8 @@ def pick_ports(ticker):
 
 
 def make_config(name, ticker, block_time=120, supply=None, emission_speed=20, tail=0.3,
-                seeds=(), premine=None, premine_address=None, unique_genesis=False, launch_time=None):
+                seeds=(), premine=None, premine_address=None, unique_genesis=False, launch_time=None,
+                mined_unlock=5, spendable_age=3, difficulty_window=60, difficulty_lag=2, difficulty_cut=6):
     ticker = ticker.upper()
     if not re.fullmatch(r"[A-Z0-9]{2,10}", ticker):
         raise ValueError("ticker must be 2-10 chars A-Z/0-9")
@@ -56,6 +57,13 @@ def make_config(name, ticker, block_time=120, supply=None, emission_speed=20, ta
         raise ValueError("block time must be a multiple of 60 seconds (60..3600)")
     if not 1 <= emission_speed - (block_time // 60 - 1) <= 63:
         raise ValueError("emission speed out of range for this block time")
+    if not 1 <= mined_unlock <= 60:
+        raise ValueError("mined unlock window must be 1..60 blocks")
+    if not 1 <= spendable_age <= 10:
+        raise ValueError("spendable age must be 1..10 blocks")
+    if not (4 <= difficulty_window <= 10000 and difficulty_lag <= difficulty_window
+            and 2 * difficulty_cut <= difficulty_window - 2):
+        raise ValueError("need 4 <= difficulty window <= 10000, lag <= window, 2*cut <= window-2")
     tail_atomic = int(round(tail * COIN))
     for s in seeds:
         host, _, port = s.rpartition(":")
@@ -76,6 +84,11 @@ def make_config(name, ticker, block_time=120, supply=None, emission_speed=20, ta
         "emission_speed_factor": emission_speed,
         "final_subsidy_per_minute": str(tail_atomic),
         "difficulty_target": block_time,
+        "mined_unlock_window": mined_unlock,
+        "spendable_age": spendable_age,
+        "difficulty_window": difficulty_window,
+        "difficulty_lag": difficulty_lag,
+        "difficulty_cut": difficulty_cut,
         "address_prefixes": {"standard": 18, "integrated": 19, "subaddress": 42},
         "seed_nodes": list(seeds),
     }
@@ -97,7 +110,7 @@ def make_config(name, ticker, block_time=120, supply=None, emission_speed=20, ta
         amount = int(round(premine * COIN))
         if amount >= supply_atomic - genesis_amount:
             raise ValueError("premine must be below total supply")
-        blob, plen, _ = cn.coinbase_v2(1, amount, spend, view, cn.random_scalar())
+        blob, plen, _ = cn.coinbase_v2(1, amount, spend, view, cn.random_scalar(), mined_unlock)
         cfg["premine"] = {"tx": blob.hex(), "amount": str(amount),
                           "address": cn.encode_address(18, spend, view), "tx_hash": cn.tx_hash(blob, plen).hex()}
     return cfg
@@ -113,6 +126,11 @@ def main():
     ap.add_argument("--emission-speed", type=int, default=20, help="EMISSION_SPEED_FACTOR_PER_MINUTE (lower = faster)")
     ap.add_argument("--tail", type=float, default=0.3, help="tail emission, coins per minute (Monero: 0.3)")
     ap.add_argument("--seed", action="append", default=[], help="seed node IPv4:port (repeatable)")
+    ap.add_argument("--mined-unlock", type=int, default=5, help="blocks until coinbase unlocks, 1..60 (Monero: 60)")
+    ap.add_argument("--spendable-age", type=int, default=3, help="blocks before outputs are spendable, 1..10 (Monero: 10)")
+    ap.add_argument("--difficulty-window", type=int, default=60, help="blocks (Monero: 720)")
+    ap.add_argument("--difficulty-lag", type=int, default=2, help="blocks (Monero: 15)")
+    ap.add_argument("--difficulty-cut", type=int, default=6, help="outlier timestamps cut each side (Monero: 60)")
     ap.add_argument("--premine", type=float, help="premine in coins, paid by a fixed block-1 coinbase")
     ap.add_argument("--premine-address", help="standard address that receives the premine")
     ap.add_argument("--unique-genesis", action="store_true", help="per-coin genesis (breaks stock wallets)")
@@ -129,7 +147,10 @@ def main():
         ap.error("--name and --ticker are required")
     try:
         cfg = make_config(a.name, a.ticker, a.block_time, a.supply, a.emission_speed, a.tail,
-                          a.seed, a.premine, a.premine_address, a.unique_genesis)
+                          a.seed, a.premine, a.premine_address, a.unique_genesis,
+                          mined_unlock=a.mined_unlock, spendable_age=a.spendable_age,
+                          difficulty_window=a.difficulty_window, difficulty_lag=a.difficulty_lag,
+                          difficulty_cut=a.difficulty_cut)
     except ValueError as e:
         sys.exit(f"error: {e}")
     text = json.dumps(cfg, indent=2) + "\n"

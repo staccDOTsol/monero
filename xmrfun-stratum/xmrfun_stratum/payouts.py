@@ -116,17 +116,43 @@ class Payouts:
         if not due:
             return None
         unlocked = wallet_rpc(wallet_url, "get_balance", {"account_index": 0})["unlocked_balance"]
+        budget = int(unlocked * 0.9)  # young chains have large fees relative to rewards; keep headroom
+        # Pay whoever fits in what's unlocked now (smallest first, so more miners get paid sooner);
+        # the rest waits for the next pass instead of everyone waiting for the full total.
+        batch, spent = [], 0
+        for m, a in sorted(due, key=lambda x: x[1]):
+            if spent + a <= budget:
+                batch.append((m, a)); spent += a
+        if not batch:
+            # nobody fits whole: pay the largest balance partially so coins still flow
+            m, a = max(due, key=lambda x: x[1])
+            part = min(a, budget)
+            if part < int(float(self.cfg["min_payout"]) * atomic_units):
+                log.info("%s: %d owed to %d miners, pool wallet has %d unlocked; waiting", chain, sum(x for _, x in due), len(due), unlocked)
+                return None
+            batch = [(m, part)]
+        due = batch
         total = sum(a for _, a in due)
-        if unlocked < total * 1.01:
-            log.info("%s: %d owed to %d miners but pool wallet has %d unlocked; waiting", chain, total, len(due), unlocked)
-            return None
         # Mark as paid before sending: a crash after broadcast must never lead to paying twice.
         for m, a in due:
             self.db.execute("UPDATE balances SET owed=owed-?, paid=paid+? WHERE chain=? AND miner=?", (a, a, chain, m))
         self.db.commit()
         try:
-            res = wallet_rpc(wallet_url, "transfer_split", {"account_index": 0, "priority": 0,
-                             "destinations": [{"address": m, "amount": a} for m, a in due]})
+            res = None
+            for attempt in range(4):  # if the fee doesn't fit, shrink this batch and retry; the remainder stays owed
+                try:
+                    res = wallet_rpc(wallet_url, "transfer_split", {"account_index": 0, "priority": 0,
+                                     "destinations": [{"address": m, "amount": a} for m, a in due]})
+                    break
+                except RuntimeError as e:
+                    if "not enough" not in str(e) or attempt == 3:
+                        raise
+                    shrunk = [(m, a // 2) for m, a in due]
+                    for (m, a), (_, b) in zip(due, shrunk):  # give back the unsent half
+                        self.db.execute("UPDATE balances SET owed=owed+?, paid=paid-? WHERE chain=? AND miner=?", (a - b, a - b, chain, m))
+                    self.db.commit()
+                    due = [(m, b) for m, b in shrunk if b > 0]
+                    total = sum(b for _, b in due)
         except Exception:
             for m, a in due:  # nothing was broadcast; restore balances
                 self.db.execute("UPDATE balances SET owed=owed+?, paid=paid-? WHERE chain=? AND miner=?", (a, a, chain, m))

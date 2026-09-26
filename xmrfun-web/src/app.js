@@ -559,14 +559,14 @@ const VIEWS = {
     const nC = Object.keys(STATE.launches || {}).length, nK = Object.keys(STATE.collections).length, nI = Object.keys(STATE.items).length;
     const why = [
       ["Nobody can watch your bag", "On public chains every buy is a signal: copy-traders, dev-wallet witch hunts, doxxed whales. Here balances and transfers are private by default."],
-      ["No snipers, no sandwiches", "There's no readable mempool of swaps to front-run. The first block isn't a bot race."],
-      ["No contract to rug", "Your coin isn't a token on someone else's chain — it's its own RandomX network. No mint function, no owner key, no approvals."],
+      ["No snipers, no sandwiches", "Private transactions — nothing useful to front-run. Amounts and recipients are hidden, so the first block isn't a bot race."],
+      ["No contract to rug", "Your coin isn't a token on someone else's chain — it's an independent RandomX network with its own network ID. No mint function, no owner key, no approvals."],
       ["Prove only what you choose", "Own collection item #0042? Prove exactly that, nothing else about your wallet."],
     ];
-    const vs = [["Wallets", "public forever", "private by default"], ["Launch", "bot race in block 1", "fair: mined from block 1"],
+    const vs = [["Wallets", "public forever", "private by default"], ["Launch", "bot race in block 1", "emission starts at block 1"], ["Allocation", "dev & sniper bags", "no founder allocation"],
       ["Coin lives on", "a contract on Solana", "its own chain"], ["Rug surface", "mint / freeze / LP", "none — no contract"], ["NFT ownership", "public ledger", "proven on demand"]];
     const faq = [
-      ["Is this real Monero?", "Memecoins: each is a new Monero-codebase chain with its own coin and the same privacy tech (RingCT, stealth addresses, RandomX). Collections: every item is a real XMR output on Monero mainnet (the creator sets its size, 0.001 XMR by default) — but Monero itself doesn't know it's an item. The xmrfun indexer records which output is which item, and only accepts changes backed by proofs it checks against the chain."],
+      ["Is this real Monero?", "Memecoins: each is an independent Monero-codebase network with its own network ID and coin, and the same privacy tech (RingCT, stealth addresses, RandomX). It shares Monero's genesis block so standard Monero wallets can follow it. Collections: every item is a real XMR output on Monero mainnet (the creator sets its size, 0.001 XMR by default) — but Monero itself doesn't know it's an item. The xmrfun indexer records which output is which item, and only accepts changes backed by proofs it checks against the chain."],
       ["Who holds my keys?", "You. The wallet runs in your browser and never sends keys anywhere. xmrfun only sees signatures and proofs you choose to publish."],
       ["Do I lose XMR when I mint?", "No. Each item holds a tiny XMR output (0.001 by default) that you own and that travels with the item. Only the network fee is spent."],
       ["How do new coins get secure?", "One stratum URL points miners at every xmrfun chain, weighted by what pays best — new launches get hashrate from day one."],
@@ -576,7 +576,7 @@ const VIEWS = {
       h("section", { class: "hero" },
         h("div", { class: "label" }, "private launchpad · built on monero"),
         h("h1", { class: "mega" }, "Memecoins ", h("em", {}, "nobody"), " can snipe."),
-        h("p", { class: "lede" }, "Launch a coin on its own private chain, or drop collectibles backed by real XMR. No public wallets, no bot races, no contract to rug."),
+        h("p", { class: "lede" }, "Launch a coin on its own private RandomX network, or drop collectibles backed by real XMR. Private transactions, no founder allocation, no contract to rug."),
         h("div", { class: "hero-cta" },
           h("a", { class: "btn primary", href: "#/launch/coin" }, "Launch a coin"),
           h("a", { class: "btn", href: "#/feed" }, "See what's live")),
@@ -590,12 +590,12 @@ const VIEWS = {
         h("div", { class: "how" },
           h("div", { class: "how-col" }, h("div", { class: "label" }, "memecoin"),
             h("ol", {}, h("li", {}, h("b", {}, "Name it."), " Ticker, supply, block time. One signature, free."),
-              h("li", {}, h("b", {}, "We forge the chain."), " A fresh RandomX network with its own genesis, wallets and seed nodes."),
-              h("li", {}, h("b", {}, "Miners arrive."), " The xmrfun stratum routes hashrate to it. Coins go to whoever mines them."))),
+              h("li", {}, h("b", {}, "We forge the chain."), " An independent RandomX network with its own network ID, node and pool wallet — live in about a minute."),
+              h("li", {}, h("b", {}, "Miners arrive."), " The xmrfun stratum routes hashrate to it. Emission starts at block 1; miner payouts unlock shortly after."))),
           h("div", { class: "how-col" }, h("div", { class: "label" }, "collection"),
             h("ol", {}, h("li", {}, h("b", {}, "Drop it."), " Name, image, cap. Registering is a free signature."),
               h("li", {}, h("b", {}, "Mint."), " Each item binds to a tiny XMR output you still own (0.001 by default); the indexer checks the proofs on-chain."),
-              h("li", {}, h("b", {}, "Trade in one tap."), " Buyer's app pays, seller's app delivers, the buyer's app claims."))))),
+              h("li", {}, h("b", {}, "Trade in one tap."), " Escrowed trading with instant delivery for coins; items move with on-chain proofs."))))),
       h("section", { class: "sec" }, h("h2", {}, "vs. the usual"),
         h("table", { class: "vs" }, h("thead", {}, h("tr", {}, h("th", {}), h("th", {}, "pump-style"), h("th", {}, "xmrfun"))),
           h("tbody", {}, vs.map(([a, b, c]) => h("tr", {}, h("th", {}, a), h("td", {}, b), h("td", {}, c)))))),
@@ -651,7 +651,7 @@ const VIEWS = {
       h("section", { class: "sec" }, h("h2", {}, "Status"), st.el),
       stage >= 2 && l.rpc_public && (() => {
         const box = h("div", { class: "stats" }, h("div", { class: "skel", style: "min-height:64px;grid-column:1/-1" }));
-        fetch(l.rpc_public + "/get_info").then((r) => r.json()).then((i) => box.replaceChildren(
+        fetch(`/chaininfo?ticker=${t}`, { signal: AbortSignal.timeout(8000) }).then((r) => r.json()).then((i) => box.replaceChildren(
           h("div", { class: "stat" }, countUp(i.height), h("span", {}, "height")),
           h("div", { class: "stat" }, h("b", {}, `${(i.difficulty / (i.target || 60) / 1000).toFixed(1)}k`), h("span", {}, "H/s network")),
           h("div", { class: "stat" }, h("b", {}, i.tx_count ?? 0), h("span", {}, "txs")))).catch(() => box.replaceChildren(h("div", { class: "empty", style: "grid-column:1/-1" }, "Node unreachable right now")));
@@ -672,7 +672,7 @@ const VIEWS = {
     const mine = Object.entries(STATE.orders || {}).filter(([, o]) => W && (o.buyer === ADDR || o.seller === ADDR));
     return h("div", {},
       h("h1", {}, "Market"), tabs,
-      h("p", { class: "lede" }, "Tap buy. Your app pays, the seller's app delivers, yours claims. No chats, no copy-paste."),
+      h("p", { class: "lede" }, "Tap buy. Your app pays, the seller's app delivers the item, yours claims it. No chats, no copy-paste."),
       mine.length > 0 && h("section", { class: "sec" }, h("div", { class: "sec-head" }, h("h2", {}, "Your trades")),
         h("div", { class: "list" }, mine.map(([k, o]) => h("div", { class: "row", onclick: () => (location.hash = `#/c/${o.collection_id}/${o.item_no}`) },
           h("div", { class: "ico" }, glyph(k)), h("div", {}, h("div", { class: "t" }, `${collName(o.collection_id)} #${pad(o.item_no)}`),
@@ -760,7 +760,7 @@ const VIEWS = {
       h("div", { class: "seg", style: "margin-top:16px", role: "group", "aria-label": "Launch type" },
         h("button", { "aria-pressed": String(isCoin), onclick: () => (location.hash = "#/launch/coin") }, "Memecoin"),
         h("button", { "aria-pressed": String(!isCoin), onclick: () => (location.hash = "#/launch/collection") }, "Collection")),
-      h("p", { class: "lede" }, isCoin ? "Your coin gets its own private RandomX chain — its own wallets, its own miners. The xmrfun stratum points hashrate at it from block 1." : "Registering is free. You choose how much XMR each item carries (0.001 by default) — it stays yours and moves with the item."),
+      h("p", { class: "lede" }, isCoin ? "Your coin gets an independent RandomX network with its own network ID. Emission starts at block 1 and the xmrfun stratum points hashrate at it immediately. No founder allocation." : "Registering is free. You choose how much XMR each item carries (0.001 by default) — it stays yours and moves with the item."),
       pv,
       isCoin ? [inp("name", "Name", { placeholder: "Ember Coin", maxLength: 40 }), inp("ticker", "Ticker", { placeholder: "EMBR", maxLength: 6, autocapitalize: "characters", style: "text-transform:uppercase;font-family:var(--mono);letter-spacing:.08em" }),
         h("div", { class: "two" }, inp("supply", "Total supply", { inputMode: "numeric" }), inp("block_time", "Block time (s)", { inputMode: "numeric" }))]

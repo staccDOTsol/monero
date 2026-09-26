@@ -624,6 +624,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, "result": {"ticker": t, "escrow_address": addr}})
             except Exception as e:
                 return self._send(400, {"ok": False, "error": str(e)})
+        if self.path.startswith("/chaininfo"):
+            t = self.path.split("ticker=")[-1].split("&")[0].upper()
+            with LOCK:
+                l = load().get("launches", {}).get(t, {})
+            if l.get("status") != "live" or not l.get("daemon"):
+                return self._send(404, {"ok": False, "error": f"{t} is not live"})
+            try:  # over Fly's private network: immune to public DNS lag after a (re)launch
+                i = jrpc(l["daemon"].rstrip("/") + "/json_rpc", "get_info")
+                return self._send(200, {k: i.get(k) for k in ("height", "difficulty", "target", "tx_count", "tx_pool_size", "top_block_hash")})
+            except Exception as e:
+                return self._send(502, {"ok": False, "error": str(e)})
         if self.path == "/chains":
             with LOCK:
                 return self._send(200, chains_feed(load()))
