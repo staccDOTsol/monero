@@ -182,10 +182,10 @@ async function post(path, body) {
 }
 function renderTicker() {
   const ev = [...(STATE.events || [])].slice(-24).reverse();
-  const words = { collections: "launched", mint: "minted", transfer: "moved", list: "listed", reserve: "being bought", pay: "paid for", deliver: "delivered", launches: "coin queued", "collections/meta": "updated" };
+  const words = { collections: "launched", mint: "minted", transfer: "moved", list: "listed", reserve: "being bought", pay: "paid for", deliver: "delivered", launches: "coin queued", live: "is LIVE ⛏", "collections/meta": "updated", "coin/offer": "offer posted", "coin/pay": "bought" };
   const t = $("#ticker");
   if (!ev.length) { const m = () => h("span", {}, "be the first launch · private by default · no snipers · no contract to rug ·"); t.replaceChildren(m(), m()); return; }
-  const spans = () => ev.map((e) => h("span", {}, h("b", {}, e.item || "?"), " ", h("span", { class: e.action === "mint" || e.action === "launches" ? "hot" : "" }, words[e.action] || e.action)));
+  const spans = () => ev.map((e) => h("span", {}, h("b", {}, e.item || "?"), " ", h("span", { class: ["mint", "launches", "live", "coin/pay"].includes(e.action) ? "hot" : "" }, words[e.action] || e.action)));
   t.replaceChildren(...spans(), ...spans()); // doubled so the -50% loop is seamless
 }
 
@@ -412,13 +412,30 @@ async function flowBuy(c, n, tick) {
   tick(2, "Paid · seller's app delivers automatically");
 }
 
-async function flowCoinOffer(t, amount, price) {
+async function flowCoinOffer(t, amount, price, tick = () => {}) {
   need();
   const [, unlocked] = await coinBalance(t);
   if (unlocked < amount) throw new Error(`Only ${xmr(unlocked)} $${t} unlocked`);
   const nonce = Date.now().toString(36);
-  return post("/coin/offer", { ticker: t, amount: amount.toString(), price: price.toString(), nonce, maker: ADDR,
-    maker_sig: await sign(`xmrfun:v1:offer:${t}:${amount}:${price}:${nonce}`) });
+  const data = `xmrfun:v1:offer:${t}:${amount}:${price}:${nonce}`;
+  const oid = (await sha256hex(data + ADDR)).slice(0, 16);
+  tick(0, "Getting escrow address");
+  const esc = await (await fetch(`/coin/escrow?ticker=${t}`)).json();
+  if (!esc.ok) throw new Error(esc.error);
+  tick(1, `Depositing ${xmr(amount)} $${t} into escrow`);
+  const cw = await coinWallet(t);
+  const escrow_txid = (await cw.createTx({ accountIndex: 0, address: esc.result.escrow_address, amount, relay: true })).getHash();
+  const escrow_proof = await cw.getTxProof(escrow_txid, esc.result.escrow_address, `xmrfun:v1:escrow:${oid}`);
+  tick(2, "Listing");
+  for (let i = 0; ; i++) {
+    try {
+      return await post("/coin/offer", { ticker: t, amount: amount.toString(), price: price.toString(), nonce, maker: ADDR,
+        maker_sig: await sign(data), escrow_txid, escrow_proof });
+    } catch (e) { if (i > 20) throw e; await sleep(5000); } // proof needs the deposit to reach the node
+  }
+}
+async function flowCoinCancel(o) {
+  return post("/coin/cancel", { offer_id: o.id, maker_sig: await sign(`xmrfun:v1:cancel:${o.id}`) });
 }
 async function flowCoinBuy(o, tick) {
   need();
@@ -439,26 +456,6 @@ async function flowCoinBuy(o, tick) {
 const running = new Set();
 async function automate() {
   if (!W || !SYNCED) return;
-  for (const o of Object.values(STATE.offers || {})) {
-    if (o.maker !== ADDR || o.status !== "paid" || running.has(o.id)) continue;
-    running.add(o.id);
-    (async () => {
-      try {
-        toast(`Sold ${xmr(o.amount)} $${o.ticker}! Sending…`, "ok"); confetti();
-        const done = store.get("xmrfun.delivered", {});
-        let d = done[o.id];
-        const cw = await coinWallet(o.ticker);
-        if (!d) {
-          const txid = (await cw.createTx({ accountIndex: 0, address: o.taker, amount: BigInt(o.amount), relay: true })).getHash();
-          d = done[o.id] = { txid }; store.set("xmrfun.delivered", done);
-        }
-        const tx_proof = await cw.getTxProof(d.txid, o.taker, `xmrfun:v1:deliver:${o.id}`);
-        await post("/coin/deliver", { offer_id: o.id, txid: d.txid, tx_proof });
-        toast(`Delivered $${o.ticker}`, "ok");
-      } catch (e) { toast(`Delivery paused: ${e.message}`, "err", 6000); }
-      finally { running.delete(o.id); }
-    })();
-  }
   for (const [k, o] of Object.entries(STATE.orders || {})) {
     const [c, no] = [o.collection_id, o.item_no];
     const r = recs.get(k);
@@ -855,17 +852,21 @@ const VIEWS = {
 
 function coinMarket() {
   const coins = liveCoins();
-  const offers = Object.values(STATE.offers || {}).filter((o) => ["open", "reserved", "paid"].includes(o.status));
+  const offers = Object.values(STATE.offers || {}).filter((o) => ["open", "reserved", "paid", "refunding"].includes(o.status));
   const unit = (o) => Number(o.price) / Number(o.amount); // XMR per coin
   const mine = offers.filter((o) => W && (o.maker === ADDR || o.taker === ADDR));
   if (!coins.length) return h("div", { class: "empty", style: "margin-top:16px" }, h("b", {}, "No live coins yet"),
     "Coins appear here the moment their chain goes live. ", h("a", { href: "#/feed", style: "color:var(--accent)" }, "See what's forging →"));
   return h("div", {},
-    h("p", { class: "lede" }, "Buy launched coins with XMR in one tap. You pay, the seller's app sends the coins, the chain proves it."),
+    h("p", { class: "lede" }, "Buy launched coins with XMR in one tap. Sellers' coins sit in escrow, so they arrive the moment your payment is proven — no waiting on anyone."),
     mine.length > 0 && h("section", { class: "sec" }, h("div", { class: "sec-head" }, h("h2", {}, "Your trades")),
       h("div", { class: "list" }, mine.map((o) => h("div", { class: "row" }, h("div", { class: "ico" }, art(STATE.launches[o.ticker], "coin:" + o.ticker)),
         h("div", {}, h("div", { class: "t" }, `${xmr(o.amount)} $${o.ticker}`), h("div", { class: "s" }, o.maker === ADDR ? "selling" : "buying")),
-        h("span", { class: `pill ${o.status}` }, o.status))))),
+        o.maker === ADDR && o.status === "open"
+          ? (() => { const b = h("button", { class: "btn small" }, "Cancel");
+              b.onclick = () => busy(b, "…", async () => { await flowCoinCancel(o); toast("Cancelled — refund on the way", "ok"); await refreshState(); render(); });
+              return b; })()
+          : h("span", { class: `pill ${o.status}` }, o.status))))),
     coins.map((t) => {
       const os = offers.filter((o) => o.ticker === t && o.status === "open").sort((a, b) => unit(a) - unit(b));
       const sell = h("button", { class: "btn small" }, `Sell $${t}`);
@@ -890,15 +891,16 @@ async function sellCoinSheet(t) {
   const bal = h("span", {}, "loading…");
   coinBalance(t).then(([b, u]) => (bal.textContent = `${xmr(u)} unlocked of ${xmr(b)}`)).catch((e) => (bal.textContent = e.message));
   const amt = h("input", { inputMode: "decimal", placeholder: "1000" }), px = h("input", { inputMode: "decimal", placeholder: "0.05" });
+  const st = steps(["Escrow address", "Deposit coins", "List"]);
   const go = h("button", { class: "btn primary block", style: "margin-top:16px" }, "Post offer");
   go.onclick = () => busy(go, "Posting…", async () => {
     const a = parseXmr(amt.value), p = parseXmr(px.value);
     if (!a || !p) throw new Error("Enter amount and total price");
-    await flowCoinOffer(t, a, p); toast("Offer live", "ok"); confetti(); await refreshState(); close(); render();
+    await flowCoinOffer(t, a, p, (i, x) => st.tick(i, x)); st.done(); toast("Offer live — you can close the app", "ok"); confetti(); await refreshState(); close(); render();
   });
   const close = sheet(h("h2", {}, `Sell $${t}`), h("div", { class: "label" }, bal),
     h("div", { class: "field" }, h("label", {}, `Amount ($${t})`), amt), h("div", { class: "field" }, h("label", {}, "Total price (XMR)"), px,
-      h("div", { class: "hint" }, "Keep xmrfun open: your app sends the coins automatically when a buyer pays.")), go);
+      h("div", { class: "hint" }, "Your coins go into xmrfun escrow. When a buyer pays you XMR, escrow delivers instantly — close the app anytime. Cancel returns them.")), st.el, go);
 }
 // ------------------------------------------------------------------ market data (from recorded fills)
 function coinTape(t) {

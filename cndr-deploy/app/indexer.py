@@ -275,7 +275,7 @@ def pay(state, p):
     if chk["received"] < o["price"] - unit:
         raise Reject(f"payment {chk['received'] / ONE} below premium {(o['price'] - unit) / ONE}")
     o.update(status="paid", pay_txid=p["pay_txid"], paid_at=int(time.time()))
-    return o
+    return o  # the sync loop delivers the escrowed coins to the taker
 
 
 def deliver(state, p):
@@ -323,6 +323,7 @@ def admin_chain(state, p):
         raise Reject("bad status")
     if p["status"] == "live" and l.get("status") != "live":
         l["live_at"] = int(time.time())
+        state.setdefault("events", []).append({"action": "live", "at": l["live_at"], "item": t})
     l["status"] = p["status"]
     for k in ("daemon", "wallet_rpc", "rpc_public", "p2p", "genesis_hash", "network_id", "error"):
         if k in p:
@@ -367,15 +368,63 @@ def coin_offer(state, p):
     offers = state.setdefault("offers", {})
     if oid in offers:
         o = _open_offer(state, oid)
-        if price == 0 and o["status"] == "open":
-            o["status"] = "cancelled"
-            return o
         raise Reject("offer exists")
     if amount <= 0 or price <= 0:
         raise Reject("amount and price must be positive")
+    if any(o.get("escrow_txid") == p["escrow_txid"] for o in offers.values()):
+        raise Reject("escrow deposit already used")
+    chk = _coin_verify(t, state, p["escrow_txid"], escrow_address(state, t), f"xmrfun:v1:escrow:{oid}", p["escrow_proof"])
+    if not chk["good"] or chk["received"] < amount:
+        raise Reject("escrow deposit proof invalid or short")
     offers[oid] = {"id": oid, "ticker": t, "amount": amount, "price": price, "maker": p["maker"], "nonce": nonce,
-                   "status": "open", "created_at": int(time.time())}
+                   "status": "open", "escrow_txid": p["escrow_txid"], "created_at": int(time.time())}
     return offers[oid]
+
+
+def offer_id(ticker, amount, price, nonce, maker):
+    data = f"xmrfun:v1:offer:{ticker.upper()}:{int(amount)}:{int(price)}:{str(nonce)[:32]}"
+    return hashlib.sha256(data.encode() + maker.encode()).hexdigest()[:16]
+
+
+def escrow_address(state, t):
+    """Escrow lives in account 1 of the pool wallet on the coin's chain, apart from miner payouts (account 0)."""
+    l = state.get("launches", {}).get(t, {})
+    if l.get("escrow_address"):
+        return l["escrow_address"]
+    if l.get("status") != "live" or not l.get("wallet_rpc"):
+        raise Reject(f"{t} is not live")
+    url = l["wallet_rpc"].rstrip("/") + "/json_rpc"
+    if len(jrpc(url, "get_accounts")["subaddress_accounts"]) < 2:
+        jrpc(url, "create_account", {"label": "escrow"})
+    l["escrow_address"] = jrpc(url, "get_address", {"account_index": 1})["address"]
+    return l["escrow_address"]
+
+
+def escrow_payout(state, o, to, why):
+    """Send escrowed coins from the pool wallet on the coin's chain. Returns txid or None (retry later)."""
+    l = state.get("launches", {}).get(o["ticker"], {})
+    if not l.get("wallet_rpc"):
+        return None
+    try:
+        res = jrpc(l["wallet_rpc"].rstrip("/") + "/json_rpc", "transfer",
+                   {"account_index": 1, "destinations": [{"amount": o["amount"], "address": to}], "priority": 0})
+        return res["tx_hash"]
+    except Reject as e:  # usually escrow not unlocked yet (10 blocks); try again next pass
+        o["last_error"] = f"{why}: {e}"
+        return None
+
+
+def settle_offers(state):
+    for o in state.get("offers", {}).values():
+        if o["status"] == "paid" and not o.get("deliver_txid"):
+            tx = escrow_payout(state, o, o["taker"], "deliver")
+            if tx:
+                o.update(status="filled", deliver_txid=tx, filled_at=int(time.time()))
+                record_fill(state, kind="coin", ticker=o["ticker"], amount=o["amount"], price=o["price"])
+        elif o["status"] == "refunding":
+            tx = escrow_payout(state, o, o["maker"], "refund")
+            if tx:
+                o.update(status="cancelled", refund_txid=tx)
 
 
 def coin_cancel(state, p):
@@ -385,7 +434,7 @@ def coin_cancel(state, p):
     if not jrpc(VERIFIER, "verify", {"data": f"xmrfun:v1:cancel:{o['id']}", "address": o["maker"],
                                      "signature": p["maker_sig"]})["good"]:
         raise Reject("cancel not signed by maker")
-    o["status"] = "cancelled"
+    o["status"] = "refunding"  # the sync loop sends the escrowed coins back
     return o
 
 
@@ -447,6 +496,10 @@ def sync(state):
             item["history"].append({"event": "moved_unproven", "height": daemon_height()})
             changed.append(k)
     state["synced_height"] = daemon_height()
+    try:
+        settle_offers(state)
+    except Exception as e:
+        print("settle error:", e, file=sys.stderr)
     return changed
 
 
@@ -561,6 +614,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self._is_node():
             return self._node()
+        if self.path.startswith("/coin/escrow"):
+            t = self.path.split("ticker=")[-1].split("&")[0].upper()
+            try:
+                with LOCK:
+                    state = load()
+                    addr = escrow_address(state, t)
+                    save(state)
+                return self._send(200, {"ok": True, "result": {"ticker": t, "escrow_address": addr}})
+            except Exception as e:
+                return self._send(400, {"ok": False, "error": str(e)})
         if self.path == "/chains":
             with LOCK:
                 return self._send(200, chains_feed(load()))

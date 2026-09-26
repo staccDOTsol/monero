@@ -85,6 +85,10 @@ def forge(t, launch):
     fly("secrets", "set", f"CHAIN_CONFIG_JSON={blob}", f"POOL_WALLET_SEED={seed}", "--app", app, "--stage")
     fly("deploy", "--app", app, "--image", IMAGE, "--config", os.path.join(HERE, "fly.chain.toml"),
         "--ha=false", "--yes", "--wait-timeout", "10m")
+    # a fresh app deployed with --image gets no public IPs: allocate shared v4 + v6 (free) once
+    if "v6" not in fly("ips", "list", "--app", app, check=False):
+        fly("ips", "allocate-v6", "--app", app, check=False)
+        fly("ips", "allocate-v4", "--shared", "--app", app, "--yes", check=False)
     public = f"https://{app}.fly.dev"
     for _ in range(90):
         try:
