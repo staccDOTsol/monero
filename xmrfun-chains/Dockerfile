@@ -23,8 +23,8 @@ ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /src
 COPY . .
 RUN test -f external/randomx/CMakeLists.txt || { echo "external/ is empty: git submodule update --init --recursive" >&2; exit 1; }
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DUSE_DEVICE_TREZOR=OFF -DMANUAL_SUBMODULES=1 \
- && cmake --build build --target daemon wallet_rpc_server --parallel "$(nproc)" \
+RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DUSE_DEVICE_TREZOR=OFF -DMANUAL_SUBMODULES=1 -DARCH=x86-64 \
+ && cmake --build build --target daemon wallet_rpc_server --parallel 2 \
  && strip build/bin/monerod build/bin/monero-wallet-rpc
 
 FROM debian:bookworm-slim

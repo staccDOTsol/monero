@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # xmrfun chain node (one Fly app per coin). CHAIN_CONFIG_JSON (base64 or raw JSON) ->
 # $DATA_DIR/chain.json, then:
 #   monerod            P2P            0.0.0.0:18080   public  (fly [[services]])
@@ -9,6 +9,8 @@
 # boot into $DATA_DIR/pool-wallet and reopened afterwards. Without the seed it is skipped.
 # If monerod or wallet-rpc exits, the container exits so Fly restarts it.
 set -eu
+# bash (not dash) for `wait -n`: a dead-but-unreaped child still passes `kill -0`, so
+# polling never noticed monerod dying instantly (e.g. SIGILL).
 DATA_DIR="${DATA_DIR:-/data}"
 CFG="$DATA_DIR/chain.json"
 CORS="${RPC_CORS_ORIGINS:-https://xmrfun.xyz,https://xmrfun.fly.dev}"
@@ -64,7 +66,8 @@ wallet_pid=$!
 trap 'kill -INT "$monerod_pid" "$wallet_pid" 2>/dev/null; wait; exit 0' INT TERM
 
 # open the pool wallet, or restore it from the seed on first boot
-POOL_RPC_PORT="$POOL_RPC_PORT" python3 - <<'PY' || echo "pool wallet not ready (see above); wallet-rpc keeps running" >&2
+# (in the background, so a dying monerod/wallet-rpc is noticed right away)
+POOL_RPC_PORT="$POOL_RPC_PORT" python3 - <<'PY' || echo "pool wallet not ready (see above); wallet-rpc keeps running" >&2 &
 import json, os, sys, time, urllib.request
 url = "http://127.0.0.1:%s/json_rpc" % os.environ["POOL_RPC_PORT"]
 def rpc(method, params=None):
@@ -93,10 +96,9 @@ print("pool wallet restored:", out["result"]["address"], flush=True)
 PY
 
 # exit (and let Fly restart us) as soon as either process dies
-while kill -0 "$monerod_pid" 2>/dev/null && kill -0 "$wallet_pid" 2>/dev/null; do
-  sleep 5
-done
-echo "monerod or wallet-rpc exited; stopping" >&2
+status=0
+wait -n "$monerod_pid" "$wallet_pid" || status=$?
+echo "monerod or wallet-rpc exited (status $status); stopping" >&2
 kill -INT "$monerod_pid" "$wallet_pid" 2>/dev/null || true
 wait || true
 exit 1
