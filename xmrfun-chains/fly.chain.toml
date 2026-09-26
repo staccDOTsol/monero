@@ -1,0 +1,74 @@
+# One Fly app per coin (xmrfun-chain-<ticker>), all on the same image
+# registry.fly.io/xmrfun-chain:latest (see Dockerfile header). Per coin, from the repo root:
+#   xmrfun-chains/xmrfun-genesis --name "Staccx" --ticker STACCX --base64 -o staccx.b64
+#   fly apps create xmrfun-chain-staccx
+#   fly secrets set -a xmrfun-chain-staccx --stage CHAIN_CONFIG_JSON="$(cat staccx.b64)" POOL_WALLET_SEED="<25 words>"
+#   fly volumes create chain_data -a xmrfun-chain-staccx --region iad --size 10 -y
+#   fly ips allocate-v4 -a xmrfun-chain-staccx -y   # dedicated IPv4: raw-TCP P2P can't use the shared IP
+#   fly deploy -a xmrfun-chain-staccx -c xmrfun-chains/fly.chain.toml --image registry.fly.io/xmrfun-chain:latest
+#
+# Ports (entrypoint.sh):
+#   18080 P2P                     public   [[services]] tcp
+#   18089 restricted RPC + CORS   public   https://xmrfun-chain-<ticker>.fly.dev (443) and http :18089
+#   18081 full RPC                private  http://xmrfun-chain-<ticker>.internal:18081 (stratum)
+#   18083 pool wallet-rpc         private  http://xmrfun-chain-<ticker>.internal:18083 (no login!)
+# 18081/18083 are deliberately not in [[services]]; they listen on [::] for Fly's 6PN only.
+app = "xmrfun-chain-CHANGEME"
+primary_region = "iad"
+kill_signal = "SIGINT"      # entrypoint forwards it; monerod flushes LMDB
+kill_timeout = "60s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+  RPC_CORS_ORIGINS = "https://xmrfun.xyz,https://xmrfun.fly.dev"
+
+[[mounts]]
+  source = "chain_data"
+  destination = "/data"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 18080
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 18080
+
+  [[services.tcp_checks]]
+    grace_period = "60s"
+    interval = "30s"
+    timeout = "5s"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 18089
+  auto_stop_machines = "off"
+  auto_start_machines = false
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.ports]]
+    port = 18089
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    grace_period = "120s"
+    interval = "30s"
+    method = "get"
+    path = "/get_height"
+    protocol = "http"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+[[restart]]
+  policy = "always"

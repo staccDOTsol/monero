@@ -62,6 +62,7 @@
 #include "mnemonics/electrum-words.h"
 #include "multisig/multisig.h"
 #include "wallet/wallet_args.h"
+#include "cryptonote_core/chain_config.h"
 #include "wallet/fee_priority.h"
 #include "version.h"
 #include <stdexcept>
@@ -10469,6 +10470,10 @@ void simple_wallet::commit_or_save(std::vector<tools::wallet2::pending_tx>& ptx_
 int main(int argc, char* argv[])
 {
   TRY_ENTRY();
+
+  // xmrfun: before anything reads the chain constants
+  if (!cryptonote::load_chain_config_from_argv(argc, argv))
+    return 1;
 
 #ifdef WIN32
   // Activate UTF-8 support for Boost filesystem classes on Windows

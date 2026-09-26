@@ -837,6 +837,11 @@ namespace nodetool
   std::set<std::string> node_server<t_payload_net_handler>::get_ip_seed_nodes() const
   {
     std::set<std::string> full_addrs;
+    if (::config::chain::active && m_nettype == cryptonote::MAINNET) // xmrfun: only the chain's own seeds
+    {
+      const auto &seeds = ::config::chain::seed_nodes();
+      return {seeds.begin(), seeds.end()};
+    }
     if (m_nettype == cryptonote::TESTNET)
     {
       full_addrs.insert("176.9.0.187:28080");
@@ -887,7 +892,7 @@ namespace nodetool
     {
       return {};
     }
-    if (!m_enable_dns_seed_nodes)
+    if (!m_enable_dns_seed_nodes || ::config::chain::active) // xmrfun: no DNS seeds for config chains
     {
       // TODO: a domain can be set through socks, so that the remote side does the lookup for the DNS seed nodes.
       m_fallback_seed_nodes_added.test_and_set();
@@ -992,7 +997,7 @@ namespace nodetool
     case epee::net_utils::zone::public_:
       return get_dns_seed_nodes();
     case epee::net_utils::zone::tor:
-      if (m_nettype == cryptonote::MAINNET)
+      if (m_nettype == cryptonote::MAINNET && !::config::chain::active)
       {
         return {
           "zbjkbsxc5munw3qusl7j2hpcmikhqocdf4pqhnhtpzw5nt5jrmofptid.onion:18083",
@@ -1005,7 +1010,7 @@ namespace nodetool
       }
       return {};
     case epee::net_utils::zone::i2p:
-      if (m_nettype == cryptonote::MAINNET)
+      if (m_nettype == cryptonote::MAINNET && !::config::chain::active)
       {
         return {
           "uqj3aphckqtjsitz7kxx5flqpwjlq5ppr3chazfued7xucv3nheq.b32.i2p",
@@ -1058,13 +1063,13 @@ namespace nodetool
     }
     else
     {
-      memcpy(&m_network_id, &::config::NETWORK_ID, 16);
+      memcpy(&m_network_id, &cryptonote::get_config(cryptonote::MAINNET).NETWORK_ID, 16); // xmrfun: runtime
     }
 
     m_config_folder = command_line::get_arg(vm, cryptonote::arg_data_dir);
     network_zone& public_zone = m_network_zones.at(epee::net_utils::zone::public_);
 
-    if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(::config::P2P_DEFAULT_PORT))
+    if ((m_nettype == cryptonote::MAINNET && public_zone.m_port != std::to_string(cryptonote::get_config(cryptonote::MAINNET).P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::TESTNET && public_zone.m_port != std::to_string(::config::testnet::P2P_DEFAULT_PORT))
         || (m_nettype == cryptonote::STAGENET && public_zone.m_port != std::to_string(::config::stagenet::P2P_DEFAULT_PORT))) {
       m_config_folder = m_config_folder + "/" + public_zone.m_port;
@@ -2209,7 +2214,7 @@ namespace nodetool
   {
     if (!m_enable_dns_blocklist)
       return true;
-    if (m_nettype != cryptonote::MAINNET)
+    if (m_nettype != cryptonote::MAINNET || ::config::chain::active) // xmrfun: no Monero blocklist
       return true;
 
     static const std::vector<std::string> dns_urls = {

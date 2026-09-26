@@ -40,6 +40,7 @@
 #include "version.h"
 #include "wallet_rpc_server.h"
 #include "wallet/wallet_args.h"
+#include "cryptonote_core/chain_config.h"
 #include "common/command_line.h"
 #include "common/i18n.h"
 #include "common/scoped_message_writer.h"
@@ -5270,6 +5271,10 @@ std::string const t_executor::NAME = "Wallet RPC Daemon";
 
 int main(int argc, char** argv) {
   TRY_ENTRY();
+
+  // xmrfun: before anything reads the chain constants
+  if (!cryptonote::load_chain_config_from_argv(argc, argv))
+    return 1;
 
   namespace po = boost::program_options;
 

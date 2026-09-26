@@ -256,6 +256,8 @@ namespace cryptonote
 
   bool checkpoints::load_checkpoints_from_dns(network_type nettype)
   {
+    if (::config::chain::active) // xmrfun: no MoneroPulse checkpoints for config chains
+      return true;
     std::vector<std::string> records;
 
     // All four MoneroPulse domains have DNSSEC on and valid

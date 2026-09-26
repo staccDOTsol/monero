@@ -41,30 +41,34 @@ namespace daemon_args
   const command_line::arg_descriptor<std::string, false, true, 2> arg_config_file = {
     "config-file"
   , "Specify configuration file"
-  , (daemonizer::get_default_data_dir() / std::string(CRYPTONOTE_NAME ".conf")).string()
+  , (daemonizer::get_default_data_dir() / (std::string(CRYPTONOTE_NAME) + ".conf")).string()
   , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
   , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
+      if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+        val = (daemonizer::get_default_data_dir() / (std::string(CRYPTONOTE_NAME) + ".conf")).string();
       if (testnet_stagenet[0] && defaulted)
         return (daemonizer::get_default_data_dir() / "testnet" /
-                std::string(CRYPTONOTE_NAME ".conf")).string();
+                (std::string(CRYPTONOTE_NAME) + ".conf")).string();
       else if (testnet_stagenet[1] && defaulted)
         return (daemonizer::get_default_data_dir() / "stagenet" /
-                std::string(CRYPTONOTE_NAME ".conf")).string();
+                (std::string(CRYPTONOTE_NAME) + ".conf")).string();
       return val;
     }
   };
   const command_line::arg_descriptor<std::string, false, true, 2> arg_log_file = {
     "log-file"
   , "Specify log file"
-  , (daemonizer::get_default_data_dir() / std::string(CRYPTONOTE_NAME ".log")).string()
+  , (daemonizer::get_default_data_dir() / (std::string(CRYPTONOTE_NAME) + ".log")).string()
   , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
   , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
+      if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+        val = (daemonizer::get_default_data_dir() / (std::string(CRYPTONOTE_NAME) + ".log")).string();
       if (testnet_stagenet[0] && defaulted)
         return (daemonizer::get_default_data_dir() / "testnet" /
-                std::string(CRYPTONOTE_NAME ".log")).string();
+                (std::string(CRYPTONOTE_NAME) + ".log")).string();
       else if (testnet_stagenet[1] && defaulted)
         return (daemonizer::get_default_data_dir() / "stagenet" /
-                std::string(CRYPTONOTE_NAME ".log")).string();
+                (std::string(CRYPTONOTE_NAME) + ".log")).string();
       return val;
     }
   };
@@ -121,6 +125,8 @@ namespace daemon_args
   , std::to_string(config::ZMQ_RPC_DEFAULT_PORT)
   , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
   , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
+      if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+        val = std::to_string(cryptonote::get_config(cryptonote::MAINNET).ZMQ_RPC_DEFAULT_PORT);
       if (testnet_stagenet[0] && defaulted)
         return std::to_string(config::testnet::ZMQ_RPC_DEFAULT_PORT);
       if (testnet_stagenet[1] && defaulted)

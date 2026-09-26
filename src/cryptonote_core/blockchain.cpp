@@ -1366,6 +1366,27 @@ bool Blockchain::prevalidate_miner_transaction(const block& b, uint64_t height, 
 bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, bool &partial_block_reward, uint8_t version)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
+
+  // xmrfun: block 0 comes from the chain config, not a miner. With a custom supply/emission the
+  // (stock) genesis amount no longer equals the formula reward, so the reward rule is skipped.
+  if (::config::chain::active && boost::get<txin_gen>(b.miner_tx.vin[0]).height == 0)
+  {
+    base_reward = get_outs_money_amount(b.miner_tx);
+    partial_block_reward = false;
+    return true;
+  }
+
+  // xmrfun premine: block 1's coinbase is fixed by the chain config (config::chain::premine_tx)
+  if (!::config::chain::premine_tx().empty() && boost::get<txin_gen>(b.miner_tx.vin[0]).height == 1)
+  {
+    cryptonote::blobdata premine_blob;
+    CHECK_AND_ASSERT_MES(epee::string_tools::parse_hexstr_to_binbuff(::config::chain::premine_tx(), premine_blob), false, "bad premine tx");
+    CHECK_AND_ASSERT_MES(tx_to_blob(b.miner_tx) == premine_blob, false, "block 1 must carry the premine coinbase");
+    CHECK_AND_ASSERT_MES(fee == 0, false, "block 1 must not contain transactions");
+    base_reward = ::config::chain::premine_amount;
+    partial_block_reward = false;
+    return true;
+  }
   //validate reward
   uint64_t money_in_use = 0;
   for (auto& o: b.miner_tx.vout)
@@ -1668,6 +1689,20 @@ bool Blockchain::create_block_template(block& b, const crypto::hash *from_block,
     return false;
   }
   pool_cookie = m_tx_pool.cookie();
+
+  // xmrfun premine: block 1 carries only the fixed premine coinbase
+  if (!::config::chain::premine_tx().empty() && height == 1)
+  {
+    cryptonote::blobdata premine_blob;
+    CHECK_AND_ASSERT_MES(epee::string_tools::parse_hexstr_to_binbuff(::config::chain::premine_tx(), premine_blob)
+        && parse_and_validate_tx_from_blob(premine_blob, b.miner_tx), false, "bad premine tx");
+    b.tx_hashes.clear();
+    expected_reward = ::config::chain::premine_amount;
+    cumulative_weight = get_transaction_weight(b.miner_tx);
+    if (!from_block)
+      cache_block_template(b, miner_address, ex_nonce, diffic, height, expected_reward, cumulative_weight, seed_height, seed_hash, pool_cookie, include_sensitive);
+    return true;
+  }
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
   size_t real_txs_weight = 0;
   uint64_t real_fee = 0;

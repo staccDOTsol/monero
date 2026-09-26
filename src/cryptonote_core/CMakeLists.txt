@@ -28,6 +28,7 @@
 
 set(cryptonote_core_sources
   blockchain.cpp
+  chain_config.cpp
   cryptonote_core.cpp
   tx_pool.cpp
   tx_sanity_check.cpp

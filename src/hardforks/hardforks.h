@@ -40,9 +40,10 @@ struct hardfork_t
   hardfork_t(uint8_t version, uint64_t height, uint8_t threshold, time_t time): version(version), height(height), threshold(threshold), time(time) {}
 };
 
-extern const hardfork_t mainnet_hard_forks[];
-extern const uint64_t mainnet_hard_fork_version_1_till;
-extern const size_t num_mainnet_hard_forks;
+// xmrfun: pointer + count (not an array) so --chain-config can swap in its own table
+extern const hardfork_t *mainnet_hard_forks;
+extern uint64_t mainnet_hard_fork_version_1_till;
+extern size_t num_mainnet_hard_forks;
 
 extern const hardfork_t testnet_hard_forks[];
 extern const uint64_t testnet_hard_fork_version_1_till;

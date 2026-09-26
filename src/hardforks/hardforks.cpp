@@ -35,11 +35,15 @@
 // full current consensus ruleset (v16, RandomX PoW) is live from block 1 onward.
 // Block 0 (genesis) is handled separately by HardFork's original_version and
 // never runs PoW checks, so it is untouched by this table.
-const hardfork_t mainnet_hard_forks[] = {
+static const hardfork_t compiled_mainnet_hard_forks[] = {
+  // v1 for the genesis block only: without it HardFork has no v1 entry (it only adds a
+  // placeholder for an empty table), reports v16 on an empty DB and rejects genesis.
+  { 1, 0, 0, 1341378000 },
   { 16, 1, 0, 1790294400 }, // Cinderfork launch: RandomX + full v16 ruleset from block 1
 };
-const size_t num_mainnet_hard_forks = sizeof(mainnet_hard_forks) / sizeof(mainnet_hard_forks[0]);
-const uint64_t mainnet_hard_fork_version_1_till = 0;
+const hardfork_t *mainnet_hard_forks = compiled_mainnet_hard_forks;
+size_t num_mainnet_hard_forks = sizeof(compiled_mainnet_hard_forks) / sizeof(compiled_mainnet_hard_forks[0]);
+uint64_t mainnet_hard_fork_version_1_till = 0;
 
 const hardfork_t testnet_hard_forks[] = {
   // version 1 from the start of the blockchain

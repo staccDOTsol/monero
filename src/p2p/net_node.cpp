@@ -112,6 +112,8 @@ namespace nodetool
       , std::to_string(config::P2P_DEFAULT_PORT)
       , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
       , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
+          if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+            val = std::to_string(cryptonote::get_config(cryptonote::MAINNET).P2P_DEFAULT_PORT);
           if (testnet_stagenet[0] && defaulted)
             return std::to_string(config::testnet::P2P_DEFAULT_PORT);
           else if (testnet_stagenet[1] && defaulted)
@@ -125,6 +127,8 @@ namespace nodetool
       , std::to_string(config::P2P_DEFAULT_PORT)
       , {{ &cryptonote::arg_testnet_on, &cryptonote::arg_stagenet_on }}
       , [](std::array<bool, 2> testnet_stagenet, bool defaulted, std::string val)->std::string {
+          if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+            val = std::to_string(cryptonote::get_config(cryptonote::MAINNET).P2P_DEFAULT_PORT);
           if (testnet_stagenet[0] && defaulted)
             return std::to_string(config::testnet::P2P_DEFAULT_PORT);
           else if (testnet_stagenet[1] && defaulted)

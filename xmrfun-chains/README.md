@@ -1,105 +1,120 @@
-# xmrfun chain factory
+# xmrfun chains: one binary, one JSON per coin
 
-Each xmrfun launch is its own RandomX CryptoNote chain, forked from this repo
-(Monero + the Cinderfork changes). The factory turns launch params into a git
-branch `chain/<TICKER>` that builds a working daemon and wallets.
+Every xmrfun coin is its own RandomX CryptoNote chain, but they all run the same
+`monerod` / `monero-wallet-rpc` / `monero-wallet-cli` build. A chain is a JSON file
+passed as `--chain-config <file>`. It is read first thing in `main()` and rewrites the
+mainnet parameters before anything else looks at them. Launching a coin means
+generating a JSON and deploying the prebuilt image with it. Nothing gets recompiled.
+
+Without `--chain-config` the binaries are Cinderfork, as before (prefix 4242, ports
+19080/19081, `~/.cinderfork`).
 
 ```
-python3 mkchain.py --name "Test Coin" --ticker TEST --block-time 60 \
-    --premine 1000 --premine-address 4... \
-    --seed 203.0.113.10 --seed seed.test.example.com
-./build.sh TEST                       # -> out/TEST/{monerod,monero-wallet-cli,monero-wallet-rpc}
-python3 verify.py TEST --blocks 10    # two local nodes, mine, sync, wallet check
+python3 chainconfig.py --name "Staccx" --ticker STACCX -o staccx.json   # new chain
+monerod --chain-config staccx.json                                      # node
+monero-wallet-rpc --chain-config staccx.json --daemon-address 127.0.0.1:<rpc_port> ...
+python3 verify.py                                                       # local end-to-end test
 ```
 
 | file | what |
 |---|---|
-| `mkchain.py` | derives params, creates worktree `work/<TICKER>` on branch `chain/<TICKER>`, patches, commits, writes `chains/<TICKER>.json` |
-| `cnutil.py` | stdlib keccak / ed25519 / base58 / tx serialization; builds the genesis and premine txs (`python3 cnutil.py` self-tests against Monero's genesis hash) |
-| `build.sh` | submodules + cmake + make, copies binaries to `out/<TICKER>/`, then checks the built daemon's block 0 hash equals the one mkchain computed |
-| `verify.py` | local end-to-end run (real mainnet mode, not regtest) |
-| `deploy/` | Dockerfile, entrypoint, fly.toml, .dockerignore templates rendered into each chain branch |
+| `chainconfig.py` | launch params -> chain JSON (random network id, genesis tx + nonce, optional premine); `--check FILE` prints a config's genesis hash |
+| `cnutil.py` | stdlib keccak / ed25519 / base58 / tx serialization used to build genesis + premine txs (`python3 cnutil.py` self-tests against Monero's genesis hash) |
+| `Dockerfile` | the single image: monerod + monero-wallet-rpc + `xmrfun-chainconfig` |
+| `entrypoint.sh` | `CHAIN_CONFIG_JSON` env (raw or base64) -> `/data/chain.json` -> monerod, public P2P 18080 + restricted RPC 18081 |
+| `fly.chain.toml` | one Fly app per coin |
+| `verify.py` | two chains from one binary, mining, peer refusal, wallet-rpc, no-flag Cinderfork check |
 
-## Params
+## Chain config schema
 
-| flag | default | patched into |
-|---|---|---|
-| `--name`, `--ticker` | required | `CRYPTONOTE_NAME` = `xmrfun-<ticker>` (data dir `~/.xmrfun-<ticker>`), genesis tx extra |
-| `--supply` (coins) | 2^64-1 atomic (Monero) | `MONEY_SUPPLY`; max 18446744 coins (12 decimals, uint64) |
-| `--emission-speed` | 20 | `EMISSION_SPEED_FACTOR_PER_MINUTE` (lower = faster emission) |
-| `--block-time` (s) | 120 | `DIFFICULTY_TARGET_V2`; multiple of 60 (consensus static_assert) |
-| `--premine`, `--premine-address` | none | `PREMINE_TX`, `PREMINE_AMOUNT` (see below) |
-| `--seed` (repeatable) | none | IPv4[:port] -> `get_ip_seed_nodes()`, hostnames -> `m_seed_nodes_list` (DNS, A records, default p2p port) |
+```jsonc
+{
+  "cryptonote_name": "xmrfun-staccx",   // required: data dir (~/.xmrfun-staccx) and default log/conf names
+  "network_id": "0d6491d8...c21a",       // required: 32 hex chars (16 bytes); peers with another id are refused
+  "genesis_tx": "013c01ff00...",         // required: hex coinbase tx of block 0
+  "genesis_nonce": 3175513742,           // required: uint32
+  "launch_time": 1790387000,             // unix time; required only if hard_forks is omitted
+  "hard_forks": [{"version": 16, "height": 1, "threshold": 0, "time": 1790387000}],
+                                         // default: [{16, 1, 0, launch_time}], i.e. RandomX + v16 rules from block 1.
+                                         // {1, 0, 0, ...} is always prepended (genesis is a v1 block).
+  "p2p_port": 52830, "rpc_port": 52831, "zmq_port": 52832,   // default ports (defaults: Cinderfork's)
+  "money_supply": "18446744073709551615",   // MONEY_SUPPLY, atomic units (12 decimals); number or decimal string
+  "emission_speed_factor": 20,              // EMISSION_SPEED_FACTOR_PER_MINUTE
+  "final_subsidy_per_minute": "300000000000", // tail emission, atomic units per minute
+  "difficulty_target": 120,                 // DIFFICULTY_TARGET_V2 (block time), multiple of 60, 60..3600
+  "address_prefixes": {"standard": 18, "integrated": 19, "subaddress": 42},  // default: stock Monero
+  "seed_nodes": ["203.0.113.10:18080"],     // IPv4:port only; DNS seeds are off for config chains
+  "premine": {"tx": "02...", "amount": "1000000000000000"},  // optional, see below
+  "name": "Staccx Coin", "ticker": "STACCX", "genesis_hash": "5d59...",   // informational, ignored by the loader
+}
+```
 
-Derived per chain:
+`uint64` fields can be JSON numbers or decimal strings (JavaScript can't represent
+2^64-1). The loader validates the whole file, including that `genesis_tx` parses,
+before it changes anything. On any error the binary prints why and exits 1.
 
-* **Address prefixes** (deterministic from ticker). An address is base58 of
-  `varint(prefix) || spend || view || checksum`, encoded in 8-byte blocks of 11
-  chars. The first block is the prefix varint plus random key bytes, so the
-  leading chars are fixed wherever the block with key bytes all `00` and all
-  `ff` encode alike (`lead_chars()` in mkchain.py). Reachable first chars are
-  `1`..`j`: 1-byte prefixes (<128) give `1`..`N` and nothing more than 1 char
-  (Monero's 18 -> `4`); 2/3-byte varints give `N`..`j`, and their 2nd/3rd bytes
-  steer the next 1-2 chars. mkchain searches all prefixes < 2^21 for the longest
-  match with the ticker (max 3 chars) and picks three distinct ones (standard,
-  integrated, subaddress), shuffled by a hash of the ticker. TEST gets
-  `TESR...` / `TES...` / `TES9...`; DOGE only gets `D...`. Tickers starting with
-  `k`..`z`, `0`, `I`, `O`, `l` have no prefix match (base58/varint limits).
-* **Ports**: p2p/rpc/zmq = `40000 + (sha256(ticker) % 2000) * 10` + 0/1/2,
-  bumped if another `chains/*.json` already has them.
-* **Random, stored in the JSON** (re-running mkchain reuses them; `--fresh`
-  rolls new ones): mainnet `NETWORK_ID` (testnet/stagenet ids derived from it),
-  `GENESIS_NONCE`, genesis tx keys, premine tx key, hard-fork timestamp.
-* **Consensus**: one hard-fork entry `{16, 1, 0, <creation time>}` so RandomX +
-  the full v16 ruleset apply from block 1 (block 0 stays v1).
+## What `--chain-config` changes (MAINNET only)
+
+* `CRYPTONOTE_NAME`, `NETWORK_ID`, `GENESIS_TX`, `GENESIS_NONCE`, default P2P/RPC/ZMQ
+  ports, address prefixes (`cryptonote_config.h`: `config::chain::*` globals plus a
+  mutable `mainnet_config()` behind `get_config()`).
+* `MONEY_SUPPLY`, `EMISSION_SPEED_FACTOR_PER_MINUTE`, `FINAL_SUBSIDY_PER_MINUTE`,
+  `DIFFICULTY_TARGET_V2`. These macros now expand to the globals, so every use site
+  reads the runtime value. The one `static_assert` and one `static constexpr` that used
+  them were changed; the loader enforces the multiple-of-60 rule instead.
+* The hard-fork table: `mainnet_hard_forks` is now a pointer + count.
+* Command-line defaults that were computed during static initialization (`--data-dir`,
+  `--config-file`, `--log-file`, `--p2p-bind-port`, `--p2p-bind-port-ipv6`,
+  `--rpc-bind-port`, `--zmq-rpc-bind-port`) are recomputed when a chain config is
+  active and the flag was left at its default. `--help` still prints the Cinderfork
+  defaults.
+* Turned off for config chains: MoneroPulse DNS checkpoints, the DNS blocklist, update
+  checks, DNS seeds, Monero's hard-coded seed IPs and Tor/I2P seeds, and the
+  compiled-in Monero fast-sync hashes (`src/blocks/checkpoints.dat`). With those hashes a
+  node syncing a new chain from peers would reject its blocks once it had a full
+  512-block group. Only `seed_nodes` remain.
+
+`--chain-config` must be given on the command line, not in a `--config-file`, because
+it is read before option parsing.
+
+## Addresses and key reuse
+
+Config chains keep Monero's address prefixes by default, so a stock wallet (monero-ts,
+the browser wallet) works on every coin, and a STACCX address looks like a Monero
+address (`4...`). As a result the same keys/seed give the same address on Monero and
+on every xmrfun chain. Reusing them is the user's call. Two consequences to document
+for users:
+
+* Privacy: spending the same outputs' keys on two chains can link transactions across
+  chains (key images are chain-independent).
+* Nothing in an address says which chain it belongs to. The wallet's `--chain-config`
+  (or the daemon it talks to) decides.
 
 ## Genesis and premine
 
-`cnutil.py` builds the genesis coinbase directly (no C++ tool needed): a v1
-coinbase at height 0 of exactly the v1 block reward (consensus requires
-`reward == MONEY_SUPPLY >> EMISSION_SPEED_FACTOR`) to a random one-time key
-whose secret is discarded (burned; Monero's genesis output is unspendable in
-practice anyway), with tx pubkey + extra nonce `xmrfun:<TICKER>:<name>`.
-mkchain also computes the genesis block hash the same way monerod does
-(`keccak(varint(len) || header || tx_hash || varint(1))`); the self-test
-reproduces Monero's `418015bb…` genesis hash, and `build.sh` fails if the built
-daemon reports a different block 0 hash.
+`chainconfig.py` builds the genesis coinbase directly. It is a v1 coinbase at height 0
+of exactly the v1 block reward, which consensus requires:
+`max(MONEY_SUPPLY >> EMISSION_SPEED_FACTOR, FINAL_SUBSIDY)`. It pays a random one-time
+key whose secret is discarded, i.e. burned. Its extra field carries a tx pubkey and the
+nonce `xmrfun:<TICKER>:<name>`. The random keys, `genesis_nonce` and `network_id` make
+every launch unique, even for the same ticker. The genesis block hash is computed the
+same way monerod does. `verify.py` checks the daemon agrees, and the self-test
+reproduces Monero's `418015bb…`.
 
-The premine can't live in genesis: wallets never scan block 0 and a v1 genesis
-output can't be spent with v16 ring rules. Instead the chain gets a small
-consensus patch (`blockchain.cpp`): if `PREMINE_TX` is set, block 1's coinbase
-must be byte-for-byte `PREMINE_TX` (a v2 RingCT-null coinbase paying
-`PREMINE_AMOUNT` to the premine address with a view tag, unlock height 61) and
-`create_block_template` emits it for height 1. Whoever mines block 1, the coins
-go to the premine address. Block 1 can therefore only be mined through
-monerod's own block template (built-in miner or `get_block_template` without a
-pool reserve that rewrites the coinbase). `--premine-address` accepts any
-CryptoNote standard address (e.g. a Monero one); its keys are re-encoded with
-the new chain's prefix, so the same seed restored in the chain's wallet sees
-the coins.
+The premine can't live in genesis: wallets never scan block 0, and a v1 genesis output
+can't be spent under v16 ring rules. Instead, if `premine` is set, block 1's coinbase
+must be byte-for-byte `premine.tx`. That is a v2 RingCT-null coinbase paying the amount
+to the premine address, with a view tag and unlock height 61, and
+`create_block_template` emits it at height 1. Whoever mines block 1, the coins go to the
+premine address. Block 1 has to come from monerod's own template (built-in miner, or
+`get_block_template` used as-is, without a pool rewriting the coinbase).
 
-## What gets stripped from Monero
+## Fly.io
 
-* hard-coded mainnet checkpoints (`checkpoints.cpp`) and the compiled-in
-  fast-sync block hashes `src/blocks/checkpoints.dat` (emptied; with Monero's
-  hashes a node syncing the new chain from peers would reject its blocks once it
-  has a full 512-block group);
-* MoneroPulse DNS checkpoints, DNS blocklist and update checks (empty lists);
-* Monero's DNS seed hostnames, hard-coded seed IPs (main/test/stagenet) and Tor/I2P
-  seeds; only `--seed` values remain.
-
-Left alone: `dns_utils.cpp` still probes `updates.moneropulse.org` once to
-detect DNSSEC support (a DNS lookup, not a peer), and wallet-cli's `donate`
-command points at Monero's address (fails to parse on the new chain).
-
-## Seed node on Fly.io
-
-The chain branch has `fly.toml` at the root plus `xmrfun/{Dockerfile,entrypoint.sh,chain.json}`.
-The image builds monerod from the branch source (Debian bookworm) and runs a
-full node with public P2P and `--restricted-rpc` (also on 443 via Fly TLS).
-Steps are in the header of `fly.toml` (app, volume, dedicated IPv4 -- raw-TCP
-P2P doesn't work on Fly's shared IPv4, then `fly deploy` from the worktree root
-with submodules checked out). Nothing is deployed by the factory.
-
-Chicken-and-egg: a seed's address has to be known before building. Allocate the
-Fly IPv4 (or DNS name) first, then `mkchain.py --seed <ip> --force` and deploy.
+Build the image once, then each coin is a new app running that image with its own
+`CHAIN_CONFIG_JSON` secret and a volume. The exact commands are in the headers of
+`Dockerfile` and `fly.chain.toml`. P2P is raw TCP on 18080 and needs a dedicated IPv4
+(`fly ips allocate-v4`). The restricted RPC is served on 18081 (http) and 443 (https).
+`get_block_template` / `submit_block` are allowed on restricted RPC, so the stratum can
+use it. The node itself doesn't mine. `seed_nodes` aren't consensus, so they can be
+added to the JSON after the first node's IP is known without changing the chain.
