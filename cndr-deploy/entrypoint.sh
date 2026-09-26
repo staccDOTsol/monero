@@ -48,6 +48,20 @@ monero-wallet-rpc "${net_flag[@]}" \
   --log-file "$WALLET_DIR/wallet-rpc.log" --max-log-files 2 --log-level 0 &
 wallet_pid=$!
 
+# XMR escrow wallet for order-book bids (holds buyers' XMR until a fill settles). Only when a seed is set.
+ESCROW_PORT="${ESCROW_PORT:-28085}"
+escrow_pid=""
+if [ -n "${XMR_ESCROW_SEED:-}" ]; then
+  mkdir -p "$DATA_DIR/escrow"
+  monero-wallet-rpc "${net_flag[@]}" --non-interactive \
+    --rpc-bind-ip 127.0.0.1 --rpc-bind-port "$ESCROW_PORT" --disable-rpc-login \
+    --wallet-dir "$DATA_DIR/escrow" \
+    --daemon-address "$daemon_hostport" --daemon-ssl "$daemon_ssl" --untrusted-daemon \
+    --log-file "$DATA_DIR/escrow/wallet-rpc.log" --max-log-files 2 --log-level 0 &
+  escrow_pid=$!
+  export CNDR_ESCROW_RPC="http://127.0.0.1:${ESCROW_PORT}/json_rpc"
+fi
+
 # Wait for wallet-rpc, then open the verifier wallet (create it on first boot).
 WALLET_NAME="$WALLET_NAME" WALLET_PASSWORD="$WALLET_PASSWORD" python3 - <<'PY'
 import json, os, sys, time, urllib.request
@@ -74,14 +88,36 @@ if "error" in out:
 print("verifier wallet ready:", rpc("get_address", {"account_index": 0})["result"]["address"], flush=True)
 PY
 
+if [ -n "$escrow_pid" ]; then
+( ESCROW_URL="$CNDR_ESCROW_RPC" python3 - <<'PY' || echo "escrow wallet not ready; bids disabled" >&2
+import json, os, sys, time, urllib.request
+url = os.environ["ESCROW_URL"]
+def rpc(method, params=None):
+    body = json.dumps({"jsonrpc": "2.0", "id": "0", "method": method, "params": params or {}}).encode()
+    with urllib.request.urlopen(urllib.request.Request(url, body, {"Content-Type": "application/json"}), timeout=600) as r:
+        return json.loads(r.read())
+for _ in range(120):
+    try: rpc("get_version"); break
+    except Exception: time.sleep(1)
+out = rpc("open_wallet", {"filename": "escrow", "password": ""})
+if "error" in out:
+    out = rpc("restore_deterministic_wallet", {"filename": "escrow", "password": "", "seed": os.environ["XMR_ESCROW_SEED"],
+                                                "restore_height": int(os.environ.get("XMR_ESCROW_HEIGHT", "0"))})
+    if "error" in out: sys.exit("escrow restore failed: %s" % out["error"])
+rpc("auto_refresh", {"enable": True, "period": 20})
+print("escrow wallet ready:", rpc("get_address", {"account_index": 0})["result"]["address"][:12], flush=True)
+PY
+) &  # background: restoring can take minutes and must never hold up the site
+fi
+
 python3 /app/indexer.py serve --port "$PORT" &
 indexer_pid=$!
 
 stopping=0
-trap 'stopping=1; kill -TERM "$indexer_pid" "$wallet_pid" 2>/dev/null || true' TERM INT
+trap 'stopping=1; kill -TERM "$indexer_pid" "$wallet_pid" $escrow_pid 2>/dev/null || true' TERM INT
 status=0
-wait -n "$indexer_pid" "$wallet_pid" || status=$?
-kill -TERM "$indexer_pid" "$wallet_pid" 2>/dev/null || true
+wait -n "$indexer_pid" "$wallet_pid" $escrow_pid || status=$?
+kill -TERM "$indexer_pid" "$wallet_pid" $escrow_pid 2>/dev/null || true
 wait || true
 if [ "$stopping" = 1 ]; then exit 0; fi
 # Unexpected child exit: fail non-zero so Fly's restart policy kicks in.

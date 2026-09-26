@@ -659,11 +659,11 @@ const VIEWS = {
       })(),
       h("div", { class: "hero-cta" },
         h("a", { class: "btn primary", href: "#/mine" }, stage >= 2 ? `Mine $${t}` : "Mine when live"),
-        stage >= 2 && h("a", { class: "btn", href: "#/market/coins" }, "Trade"),
+        stage >= 2 && h("a", { class: "btn", href: `#/market/coins/${t}` }, "Trade"),
         h("button", { class: "btn", onclick: () => shareLink(`$${t} on xmrfun`, `#/coin/${t}`) }, "Share")));
   },
 
-  market(kind = "coins") {
+  market(kind = "coins", ticker) {
     const tabs = h("div", { class: "seg", style: "margin-top:14px" },
       h("button", { "aria-pressed": String(kind === "coins"), onclick: () => (location.hash = "#/market/coins") }, "Coins"),
       h("button", { "aria-pressed": String(kind === "items"), onclick: () => (location.hash = "#/market/items") }, "Items"));
@@ -850,58 +850,143 @@ const VIEWS = {
   },
 };
 
+// ------------------------------------------------------------------ order book (CLOB)
+const COIN = 1_000_000_000_000n;
+const costOf = (amount, px, up = true) => { const n = BigInt(amount) * BigInt(px); return n / COIN + (up && n % COIN ? 1n : 0n); };
+const pxStr = (px) => { const v = Number(px) / 1e12; return v >= 0.01 ? v.toFixed(4) : v.toPrecision(3); };
+function bookOf(t) {
+  const os = Object.values(STATE.offers || {}).filter((o) => o.ticker === t && o.status === "open" && (o.rem ?? o.amount) > 0);
+  const lvl = (o) => ({ id: o.id, px: BigInt(o.px ?? (BigInt(o.price) * COIN) / BigInt(o.amount)), rem: BigInt(o.rem ?? o.amount), maker: o.maker, created: o.created_at });
+  const asks = os.filter((o) => (o.side || "ask") === "ask").map(lvl).sort((a, b) => (a.px < b.px ? -1 : a.px > b.px ? 1 : a.created - b.created));
+  const bids = os.filter((o) => o.side === "bid").map(lvl).sort((a, b) => (a.px > b.px ? -1 : a.px < b.px ? 1 : a.created - b.created));
+  return { asks, bids };
+}
+function marketPx(levels, amount) { // price that fills `amount` by walking the book, or null
+  let left = amount;
+  for (const l of levels) { left -= l.rem; if (left <= 0n) return l.px; }
+  return null;
+}
+async function flowPlaceOrder(t, side, amount, px, tick = () => {}) {
+  need();
+  const nonce = Date.now().toString(36);
+  const data = `xmrfun:v1:${side}:${t}:${amount}:${px}:${nonce}`;
+  const oid = (await sha256hex(data + ADDR)).slice(0, 16);
+  tick(0, "Escrow address");
+  const esc = await (await fetch(`/coin/escrow?ticker=${t}`)).json();
+  if (!esc.ok) throw new Error(esc.error);
+  let escrow_txid, escrow_proof;
+  if (side === "ask") {
+    const [, unlocked] = await coinBalance(t);
+    if (unlocked < amount) throw new Error(`Only ${xmr(unlocked)} $${t} unlocked`);
+    tick(1, `Escrowing ${xmr(amount)} $${t}`);
+    const cw = await coinWallet(t);
+    escrow_txid = (await cw.createTx({ accountIndex: 0, address: esc.result.escrow_address, amount, relay: true })).getHash();
+    escrow_proof = await cw.getTxProof(escrow_txid, esc.result.escrow_address, `xmrfun:v1:escrow:${oid}`);
+  } else {
+    if (!esc.result.xmr_escrow_address) throw new Error("Bids aren't enabled yet");
+    const need_ = costOf(amount, px);
+    if (BAL.unlocked < need_ + 300_000_000n) throw new Error(`Need ${xmr(need_, 6)} XMR + fee unlocked`);
+    tick(1, `Escrowing ${xmr(need_, 6)} XMR`);
+    escrow_txid = await send(0, esc.result.xmr_escrow_address, need_);
+    escrow_proof = await W.getTxProof(escrow_txid, esc.result.xmr_escrow_address, `xmrfun:v1:bidescrow:${oid}`);
+  }
+  tick(2, "Placing order");
+  const body = { ticker: t, amount: amount.toString(), px: px.toString(), nonce, maker: ADDR, maker_sig: await sign(data), escrow_txid, escrow_proof };
+  for (let i = 0; ; i++) {
+    try { return await post(side === "ask" ? "/coin/offer" : "/coin/bid", body); }
+    catch (e) { if (i > 24 || !/not found|mempool|invalid|short/i.test(e.message)) throw e; await sleep(5000); }
+  }
+}
+const flowCancelOrder = async (o) => post("/coin/cancel", { order_id: o.id, maker_sig: await sign(`xmrfun:v1:cancel:${o.id}`) });
+
 function coinMarket() {
   const coins = liveCoins();
-  const offers = Object.values(STATE.offers || {}).filter((o) => ["open", "reserved", "paid", "refunding"].includes(o.status));
-  const unit = (o) => Number(o.price) / Number(o.amount); // XMR per coin
-  const mine = offers.filter((o) => W && (o.maker === ADDR || o.taker === ADDR));
   if (!coins.length) return h("div", { class: "empty", style: "margin-top:16px" }, h("b", {}, "No live coins yet"),
     "Coins appear here the moment their chain goes live. ", h("a", { href: "#/feed", style: "color:var(--accent)" }, "See what's forging →"));
+  const t = coins.includes(route().args[1]?.toUpperCase()) ? route().args[1].toUpperCase() : coins[0];
+  const { asks, bids } = bookOf(t);
+  const best = { ask: asks[0]?.px ?? null, bid: bids[0]?.px ?? null };
+  const maxRem = [...asks, ...bids].reduce((m, l) => (l.rem > m ? l.rem : m), 1n);
+  const ladderRow = (l, side) => h("button", { class: `lvl ${side}`, onclick: () => { form.px.value = pxStr(l.px); form.side(side === "ask" ? "buy" : "sell"); } },
+    h("i", { style: `width:${Number((l.rem * 100n) / maxRem)}%` }), h("span", { class: "p" }, pxStr(l.px)), h("span", { class: "a" }, xmr(l.rem, 2)),
+    h("span", { class: "m" }, l.maker === ADDR ? "you" : ""));
+  const spread = best.ask && best.bid ? `spread ${pxStr(best.ask - best.bid)}` : best.ask || best.bid ? "one-sided book" : "empty book";
+  const st = coinStats(t);
+  const mine = Object.values(STATE.offers || {}).filter((o) => W && o.maker === ADDR && o.ticker === t && ["open", "refunding"].includes(o.status));
+  const tape = (STATE.fills || []).filter((f) => f.kind === "coin" && f.ticker === t).slice(-12).reverse();
+  const form = orderForm(t, asks, bids);
   return h("div", {},
-    h("p", { class: "lede" }, "Buy launched coins with XMR in one tap. Sellers' coins sit in escrow, so they arrive the moment your payment is proven — no waiting on anyone."),
-    mine.length > 0 && h("section", { class: "sec" }, h("div", { class: "sec-head" }, h("h2", {}, "Your trades")),
-      h("div", { class: "list" }, mine.map((o) => h("div", { class: "row" }, h("div", { class: "ico" }, art(STATE.launches[o.ticker], "coin:" + o.ticker)),
-        h("div", {}, h("div", { class: "t" }, `${xmr(o.amount)} $${o.ticker}`), h("div", { class: "s" }, o.maker === ADDR ? "selling" : "buying")),
-        o.maker === ADDR && o.status === "open"
-          ? (() => { const b = h("button", { class: "btn small" }, "Cancel");
-              b.onclick = () => busy(b, "…", async () => { await flowCoinCancel(o); toast("Cancelled — refund on the way", "ok"); await refreshState(); render(); });
-              return b; })()
-          : h("span", { class: `pill ${o.status}` }, o.status))))),
-    coins.map((t) => {
-      const os = offers.filter((o) => o.ticker === t && o.status === "open").sort((a, b) => unit(a) - unit(b));
-      const sell = h("button", { class: "btn small" }, `Sell $${t}`);
-      sell.onclick = () => sellCoinSheet(t);
-      return h("section", { class: "sec" },
-        h("div", { class: "sec-head" }, h("a", { href: `#/coin/${t}` }, h("h2", {}, `$${t}`)), sell),
-        os.length ? h("div", { class: "list" }, os.map((o, i) => h("div", { class: "row", style: `animation-delay:${i * 30}ms`, onclick: () => buyCoinSheet(o) },
-          h("div", { class: "ico" }, art(STATE.launches[t], "coin:" + t)),
-          h("div", {}, h("div", { class: "t" }, `${xmr(o.amount)} $${t}`), h("div", { class: "s" }, `${unit(o).toPrecision(3)} XMR each · ${short(o.maker, 5)}`)),
-          h("div", { class: "px" }, xmr(o.price, 4), h("small", {}, "XMR")))))
-          : h("div", { class: "empty" }, h("b", {}, "No offers"), `Mined some $${t}? Sell it here.`));
-    }));
+    coins.length > 1 && h("div", { class: "filters", style: "margin-top:14px" }, coins.map((c) =>
+      h("a", { class: "fchip", href: `#/market/coins/${c}`, "aria-pressed": String(c === t) }, `$${c}`))),
+    h("div", { class: "pricebox" },
+      h("div", {}, h("div", { class: "label" }, `$${t} · ${st.tape.length ? "last trade" : "best ask"}`),
+        h("div", { class: "px-big" }, fmtPx(st.last), h("small", {}, " XMR"), " ", changePill(st.change)),
+        h("div", { class: "label" }, spread)),
+      st.tape.length > 1 && sparkline(st.tape)),
+    h("div", { class: "trade" },
+      h("div", { class: "ladder" },
+        h("div", { class: "lhead" }, h("span", {}, "price XMR"), h("span", {}, `size $${t}`), h("span", {})),
+        h("div", { class: "asks" }, asks.length ? asks.slice(0, 12).reverse().map((l) => ladderRow(l, "ask")) : h("div", { class: "none" }, "no asks")),
+        h("div", { class: "mid" }, best.ask ? pxStr(best.ask) : "—", h("small", {}, " / "), best.bid ? pxStr(best.bid) : "—"),
+        h("div", { class: "bids" }, bids.length ? bids.slice(0, 12).map((l) => ladderRow(l, "bid")) : h("div", { class: "none" }, "no bids"))),
+      form.el),
+    mine.length > 0 && h("section", { class: "sec" }, h("div", { class: "sec-head" }, h("h2", {}, "Your orders")),
+      h("div", { class: "list" }, mine.map((o) => h("div", { class: "row" },
+        h("div", { class: "ico" }, art(STATE.launches[t], "coin:" + t)),
+        h("div", {}, h("div", { class: "t" }, `${(o.side || "ask") === "ask" ? "Sell" : "Buy"} ${xmr(BigInt(o.rem ?? o.amount), 2)} / ${xmr(BigInt(o.amount), 2)} $${t}`),
+          h("div", { class: "s" }, `@ ${pxStr(o.px ?? (BigInt(o.price) * COIN) / BigInt(o.amount))} XMR`)),
+        o.status === "open" ? (() => { const b = h("button", { class: "btn small" }, "Cancel");
+          b.onclick = () => busy(b, "…", async () => { await flowCancelOrder(o); toast("Cancelled — refund on the way", "ok"); await refreshState(); render(); }); return b; })()
+          : h("span", { class: "pill in_transit" }, "refunding"))))),
+    h("section", { class: "sec" }, h("div", { class: "sec-head" }, h("h2", {}, "Trades")),
+      tape.length ? h("div", { class: "list" }, tape.map((f) => h("div", { class: "row tape" },
+        h("div", { class: "s" }, new Date(f.ts * 1000).toLocaleTimeString()), h("div", { class: "t" }, `${xmr(BigInt(f.amount), 2)} $${t}`),
+        h("div", { class: "px" }, pxStr((BigInt(f.price) * COIN) / BigInt(f.amount)), h("small", {}, "XMR"))))) : h("div", { class: "empty" }, "No trades yet — cross the spread to make the first one.")));
 }
-function buyCoinSheet(o) {
-  const st = steps(["Reserve", "Pay XMR", "Seller sends coins"]);
-  const go = h("button", { class: "btn primary block", style: "margin-top:16px" }, `Buy ${xmr(o.amount)} $${o.ticker} · ${xmr(o.price, 4)} XMR`);
-  go.onclick = () => busy(go, "Buying…", async () => { await flowCoinBuy(o, (i, s) => st.tick(i, s)); confetti(); toast("Paid! Coins are on the way.", "ok"); });
-  sheet(h("h2", {}, `Buy $${o.ticker}`), h("p", { class: "lede" }, `Coins arrive in your $${o.ticker} wallet (same keys as your XMR wallet).`), st.el, go);
-}
-async function sellCoinSheet(t) {
-  need();
-  const bal = h("span", {}, "loading…");
-  coinBalance(t).then(([b, u]) => (bal.textContent = `${xmr(u)} unlocked of ${xmr(b)}`)).catch((e) => (bal.textContent = e.message));
-  const amt = h("input", { inputMode: "decimal", placeholder: "1000" }), px = h("input", { inputMode: "decimal", placeholder: "0.05" });
-  const st = steps(["Escrow address", "Deposit coins", "List"]);
-  const go = h("button", { class: "btn primary block", style: "margin-top:16px" }, "Post offer");
-  go.onclick = () => busy(go, "Posting…", async () => {
+
+function orderForm(t, asks, bids) {
+  let side = "buy";
+  const px = h("input", { inputMode: "decimal", placeholder: "price per coin" }), amt = h("input", { inputMode: "decimal", placeholder: `amount $${t}` });
+  const segB = h("button", { "aria-pressed": "true" }, "Buy"), segS = h("button", { "aria-pressed": "false" }, "Sell");
+  const est = h("div", { class: "hint" }), st = steps(["Escrow address", "Escrow deposit", "Place order"]);
+  const go = h("button", { class: "btn primary block" }, "Buy");
+  const refresh = () => {
+    const a = parseXmr(amt.value || "0"), p = parseXmr(px.value || "0");
+    segB.setAttribute("aria-pressed", String(side === "buy")); segS.setAttribute("aria-pressed", String(side === "sell"));
+    go.textContent = side === "buy" ? `Buy $${t}` : `Sell $${t}`;
+    go.classList.toggle("sellbtn", side === "sell");
+    if (!a || !p) { est.textContent = "Tap a price in the book, or type your own. Orders that cross the spread fill instantly."; return; }
+    const crosses = side === "buy" ? asks[0] && p >= asks[0].px : bids[0] && p <= bids[0].px;
+    est.textContent = side === "buy"
+      ? `Escrows up to ${xmr(costOf(a, p), 6)} XMR. ${crosses ? "Crosses the book: fills now at the asks' prices, unused XMR comes back." : "Rests as a bid until a seller meets it."}`
+      : `Escrows ${xmr(a, 4)} $${t}. ${crosses ? "Crosses the book: fills now at the bids' prices." : "Rests as an ask until a buyer meets it."}`;
+  };
+  const setSide = (x) => { side = x; if (!px.value) { const m = x === "buy" ? asks[0]?.px : bids[0]?.px; if (m) px.value = pxStr(m); } refresh(); };
+  segB.onclick = () => setSide("buy"); segS.onclick = () => setSide("sell");
+  px.oninput = amt.oninput = refresh;
+  const mkt = h("button", { class: "btn small" }, "Market");
+  mkt.onclick = () => {
+    const a = parseXmr(amt.value || "0");
+    const m = a ? marketPx(side === "buy" ? asks : bids, a) : (side === "buy" ? asks[0]?.px : bids[0]?.px);
+    if (!m) return toast(`Not enough ${side === "buy" ? "asks" : "bids"} to fill that — it'll rest as an order`, "info");
+    px.value = pxStr(m); refresh();
+  };
+  go.onclick = () => busy(go, side === "buy" ? "Buying…" : "Selling…", async () => {
     const a = parseXmr(amt.value), p = parseXmr(px.value);
-    if (!a || !p) throw new Error("Enter amount and total price");
-    await flowCoinOffer(t, a, p, (i, x) => st.tick(i, x)); st.done(); toast("Offer live — you can close the app", "ok"); confetti(); await refreshState(); close(); render();
+    if (!a || !p) throw new Error("Enter amount and price");
+    await flowPlaceOrder(t, side === "buy" ? "bid" : "ask", a, p, (i, x) => st.tick(i, x));
+    st.done(); confetti(); toast(side === "buy" ? "Order in — fills land in your wallet" : "Order in — XMR lands in your wallet", "ok");
+    await refreshState(); render();
   });
-  const close = sheet(h("h2", {}, `Sell $${t}`), h("div", { class: "label" }, bal),
-    h("div", { class: "field" }, h("label", {}, `Amount ($${t})`), amt), h("div", { class: "field" }, h("label", {}, "Total price (XMR)"), px,
-      h("div", { class: "hint" }, "Your coins go into xmrfun escrow. When a buyer pays you XMR, escrow delivers instantly — close the app anytime. Cancel returns them.")), st.el, go);
+  if (asks[0]) px.value = pxStr(asks[0].px);
+  refresh();
+  const el = h("div", { class: "ticket" }, h("div", { class: "seg" }, segB, segS),
+    h("div", { class: "field" }, h("label", {}, "Price (XMR per coin)"), h("div", { class: "pxrow" }, px, mkt)),
+    h("div", { class: "field" }, h("label", {}, `Amount ($${t})`), amt), est, go, st.el,
+    h("div", { class: "hint" }, "Everything settles through escrow — close the app anytime. Cancel returns whatever is unfilled."));
+  return { el, px, side: setSide };
 }
+
 // ------------------------------------------------------------------ market data (from recorded fills)
 function coinTape(t) {
   return (STATE.fills || []).filter((f) => f.kind === "coin" && f.ticker === t)

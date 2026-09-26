@@ -343,3 +343,26 @@ table.vs { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 
 .chg { font: 600 12px var(--mono); padding: 2px 6px; border-radius: 6px; vertical-align: middle; }
 .chg.up { color: var(--ok); background: var(--ok-soft); }
 .chg.down { color: var(--bad); background: oklch(0.66 0.16 25 / .12); }
+
+/* ---------- order book ---------- */
+.trade { display: grid; gap: 14px; margin-top: 16px; }
+@media (min-width: 760px) { .trade { grid-template-columns: 1fr 1fr; align-items: start; } }
+.ladder { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 10px; font: 13px var(--mono); }
+.lhead, .lvl { display: grid; grid-template-columns: 1fr 1fr 40px; gap: 8px; padding: 5px 8px; }
+.lhead { color: var(--faint); font-size: 11px; text-transform: uppercase; }
+.lvl { position: relative; width: 100%; background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; border-radius: 6px; font: inherit; }
+.lvl:hover { background: var(--surface-2); }
+.lvl:active { transform: scale(.99); }
+.lvl i { position: absolute; right: 0; top: 2px; bottom: 2px; border-radius: 4px; opacity: .18; transition: width .4s var(--ease); }
+.lvl.ask i { background: var(--bad); } .lvl.bid i { background: var(--ok); }
+.lvl.ask .p { color: var(--bad); } .lvl.bid .p { color: var(--ok); }
+.lvl .m { color: var(--accent); font-size: 11px; }
+.lvl span { position: relative; }
+.mid { text-align: center; padding: 8px; margin: 4px 0; border-block: 1px solid var(--line); font: 600 16px var(--mono); }
+.mid small { color: var(--faint); }
+.none { color: var(--faint); padding: 10px 8px; }
+.ticket { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 4px; }
+.ticket .hint { margin: 8px 0; }
+.pxrow { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.btn.sellbtn { background: var(--bad); border-color: var(--bad); color: var(--bg); }
+.row.tape { grid-template-columns: 90px 1fr auto; cursor: default; }
