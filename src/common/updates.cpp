@@ -32,6 +32,7 @@
 #include "util.h"
 #include "dns_utils.h"
 #include "updates.h"
+#include "cryptonote_config.h"
 
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "updates"
@@ -44,6 +45,8 @@ namespace tools
     bool found = false;
 
     MDEBUG("Checking updates for " << buildtag << " " << software);
+    if (::config::chain::active) // xmrfun: MoneroPulse announces Monero releases, not ours
+      return false;
 
     // All four MoneroPulse domains have DNSSEC on and valid
     static const std::vector<std::string> dns_urls = {

@@ -54,6 +54,7 @@ using namespace epee;
 #include "cryptonote_config.h"
 #include "hardforks/hardforks.h"
 #include "cryptonote_core/tx_sanity_check.h"
+#include "cryptonote_core/chain_config.h"
 #include "wallet2.h"
 #include "wallet_args.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
@@ -1327,6 +1328,7 @@ std::string wallet2::device_derivation_path_option(const boost::program_options:
 void wallet2::init_options(boost::program_options::options_description& desc_params)
 {
   const options opts{};
+  command_line::add_arg(desc_params, cryptonote::arg_chain_config); // xmrfun: consumed early in main()
   command_line::add_arg(desc_params, opts.daemon_address);
   command_line::add_arg(desc_params, opts.daemon_host);
   command_line::add_arg(desc_params, opts.proxy);

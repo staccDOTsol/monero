@@ -102,6 +102,8 @@ namespace cryptonote
   , tools::get_default_data_dir()
   , {{ &arg_testnet_on, &arg_stagenet_on, &arg_regtest_on }}
   , [](std::array<bool, 3> nets, bool defaulted, std::string val)->std::string {
+      if (::config::chain::active && defaulted) // xmrfun: static-init default predates --chain-config
+        val = tools::get_default_data_dir();
       if (nets[0])
         return (boost::filesystem::path(val) / "testnet").string();
       else if (nets[1])
@@ -1802,7 +1804,7 @@ namespace cryptonote
       return true;
     }
 
-    static constexpr double threshold = 1. / (864000 / DIFFICULTY_TARGET_V2); // one false positive every 10 days
+    const double threshold = 1. / (864000 / DIFFICULTY_TARGET_V2); // one false positive every 10 days
     static constexpr unsigned int max_blocks_checked = 150;
 
     const time_t now = time(NULL);

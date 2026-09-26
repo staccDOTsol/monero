@@ -44,6 +44,7 @@
 #include "rpc/core_rpc_server.h"
 #include "rpc/rpc_args.h"
 #include "daemon/command_line_args.h"
+#include "cryptonote_core/chain_config.h"
 #include "version.h"
 
 #ifdef STACK_TRACE
@@ -130,6 +131,10 @@ int main(int argc, char const * argv[])
 
     tools::on_startup();
 
+    // xmrfun: before anything reads the chain constants
+    if (!cryptonote::load_chain_config_from_argv(argc, argv))
+      return 1;
+
     epee::string_tools::set_module_name_and_folder(argv[0]);
 
     // Build argument description
@@ -146,6 +151,7 @@ int main(int argc, char const * argv[])
       command_line::add_arg(visible_options, daemon_args::arg_config_file);
 
       // Settings
+      command_line::add_arg(core_settings, cryptonote::arg_chain_config);
       command_line::add_arg(core_settings, daemon_args::arg_log_file);
       command_line::add_arg(core_settings, daemon_args::arg_log_level);
       command_line::add_arg(core_settings, daemon_args::arg_max_log_file_size);
@@ -275,7 +281,7 @@ int main(int argc, char const * argv[])
     //   if log-file argument given:
     //     absolute path
     //     relative path: relative to data_dir
-    bf::path log_file_path {data_dir / std::string(CRYPTONOTE_NAME ".log")};
+    bf::path log_file_path {data_dir / (std::string(CRYPTONOTE_NAME) + ".log")};
     if (!command_line::is_arg_defaulted(vm, daemon_args::arg_log_file))
       log_file_path = command_line::get_arg(vm, daemon_args::arg_log_file);
     if (!log_file_path.has_parent_path())

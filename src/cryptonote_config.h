@@ -33,7 +33,24 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <boost/uuid/uuid.hpp>
+
+// xmrfun: chain parameters that `--chain-config` (cryptonote_core/chain_config.h) may
+// override for MAINNET at startup, before anything reads them. The defaults below are the
+// compiled-in (Cinderfork) values, so without the flag nothing changes.
+namespace config { namespace chain
+{
+  inline bool active = false; // a --chain-config file was loaded
+  inline uint64_t money_supply = (uint64_t)(-1);
+  inline int emission_speed_factor_per_minute = 20;
+  inline uint64_t final_subsidy_per_minute = 300000000000; // 3 * pow(10, 11)
+  inline int difficulty_target_v2 = 120; // seconds
+  inline uint64_t premine_amount = 0; // block 1 must carry premine_tx() when non-empty
+  inline std::string &name() { static std::string s = "cinderfork"; return s; }
+  inline std::string &premine_tx() { static std::string s; return s; }
+  inline std::vector<std::string> &seed_nodes() { static std::vector<std::string> v; return v; }
+}}
 
 #define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
 
@@ -50,9 +67,9 @@
 #define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
 
 // MONEY_SUPPLY - total number coins to be generated
-#define MONEY_SUPPLY                                    ((uint64_t)(-1))
-#define EMISSION_SPEED_FACTOR_PER_MINUTE                (20)
-#define FINAL_SUBSIDY_PER_MINUTE                        ((uint64_t)300000000000) // 3 * pow(10, 11)
+#define MONEY_SUPPLY                                    (::config::chain::money_supply)
+#define EMISSION_SPEED_FACTOR_PER_MINUTE                (::config::chain::emission_speed_factor_per_minute)
+#define FINAL_SUBSIDY_PER_MINUTE                        (::config::chain::final_subsidy_per_minute)
 
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100
 #define CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V2    60000 //size of block (bytes) after which reward for block calculated using block size
@@ -76,7 +93,7 @@
 #define ORPHANED_BLOCKS_MAX_COUNT                       100
 
 
-#define DIFFICULTY_TARGET_V2                            120  // seconds
+#define DIFFICULTY_TARGET_V2                            (::config::chain::difficulty_target_v2)  // seconds
 #define DIFFICULTY_TARGET_V1                            60  // seconds - before first fork
 #define DIFFICULTY_WINDOW                               720 // blocks
 #define DIFFICULTY_LAG                                  15  // !!!
@@ -165,7 +182,7 @@
 
 #define RPC_IP_FAILS_BEFORE_BLOCK                       3
 
-#define CRYPTONOTE_NAME                         "cinderfork"
+#define CRYPTONOTE_NAME                         (::config::chain::name().c_str())
 #define CRYPTONOTE_BLOCKCHAINDATA_FILENAME      "data.mdb"
 #define CRYPTONOTE_BLOCKCHAINDATA_LOCK_FILENAME "lock.mdb"
 #define P2P_NET_DATA_FILENAME                   "p2pstate.bin"
@@ -310,19 +327,20 @@ namespace cryptonote
   };
   struct config_t
   {
-    uint64_t const CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
-    uint64_t const CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
-    uint64_t const CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX;
-    uint16_t const P2P_DEFAULT_PORT;
-    uint16_t const RPC_DEFAULT_PORT;
-    uint16_t const ZMQ_RPC_DEFAULT_PORT;
-    boost::uuids::uuid const NETWORK_ID;
-    std::string const GENESIS_TX;
-    uint32_t const GENESIS_NONCE;
+    uint64_t CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX;
+    uint64_t CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX;
+    uint64_t CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX;
+    uint16_t P2P_DEFAULT_PORT;
+    uint16_t RPC_DEFAULT_PORT;
+    uint16_t ZMQ_RPC_DEFAULT_PORT;
+    boost::uuids::uuid NETWORK_ID;
+    std::string GENESIS_TX;
+    uint32_t GENESIS_NONCE;
   };
-  inline const config_t& get_config(network_type nettype)
+  // mutable so --chain-config can rewrite the MAINNET identity at startup
+  inline config_t& mainnet_config()
   {
-    static const config_t mainnet = {
+    static config_t mainnet = {
       ::config::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
       ::config::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
       ::config::CRYPTONOTE_PUBLIC_SUBADDRESS_BASE58_PREFIX,
@@ -333,6 +351,10 @@ namespace cryptonote
       ::config::GENESIS_TX,
       ::config::GENESIS_NONCE
     };
+    return mainnet;
+  }
+  inline const config_t& get_config(network_type nettype)
+  {
     static const config_t testnet = {
       ::config::testnet::CRYPTONOTE_PUBLIC_ADDRESS_BASE58_PREFIX,
       ::config::testnet::CRYPTONOTE_PUBLIC_INTEGRATED_ADDRESS_BASE58_PREFIX,
@@ -357,10 +379,10 @@ namespace cryptonote
     };
     switch (nettype)
     {
-      case MAINNET: return mainnet;
+      case MAINNET: return mainnet_config();
       case TESTNET: return testnet;
       case STAGENET: return stagenet;
-      case FAKECHAIN: return mainnet;
+      case FAKECHAIN: return mainnet_config();
       default: throw std::runtime_error("Invalid network type");
     }
   };
